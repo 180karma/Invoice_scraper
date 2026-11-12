@@ -1,0 +1,28 @@
+name: cleanup-bootstrap
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/cleanup-bootstrap.yml"
+permissions:
+  contents: write
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Remove bootstrap chunks and helper workflows
+        run: |
+          set -euo pipefail
+          test -f invoice_scraper.html
+          rm -rf .bootstrap
+          rm -f .github/workflows/assemble-html.yml .github/workflows/cleanup-bootstrap.yml
+          rmdir .github/workflows 2>/dev/null || true
+          rmdir .github 2>/dev/null || true
+          git config user.name "Joe O'Leary"
+          git config user.email "111162201+180karma@users.noreply.github.com"
+          git add -A
+          git commit -m "Remove bootstrap chunks"
+          git push origin HEAD:main
