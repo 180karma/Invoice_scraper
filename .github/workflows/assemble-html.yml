@@ -1,0 +1,40 @@
+name: assemble-html
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".bootstrap/**"
+      - ".github/workflows/assemble-html.yml"
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble invoice_scraper.html
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, hashlib, sys
+          parts = sorted(Path(".bootstrap").glob("*.b64"))
+          if len(parts) < 37:
+              print(f"waiting for all chunks, have {len(parts)}")
+              sys.exit(0)
+          data = base64.b64decode("".join(p.read_text() for p in parts))
+          expected = "d446618d362465ce7637161460a61a51232ef970aa81831843ce5343fab53c8f"
+          got = hashlib.sha256(data).hexdigest()
+          print(len(parts), "parts", len(data), got)
+          if got != expected:
+              raise SystemExit(f"hash mismatch {got}")
+          Path("invoice_scraper.html").write_bytes(data)
+          PY
+          git config user.name "Joe O'Leary"
+          git config user.email "111162201+180karma@users.noreply.github.com"
+          git add invoice_scraper.html
+          if git diff --cached --quiet; then
+            echo "no change"
+            exit 0
+          fi
+          git commit -m "Add invoice_scraper.html"
+          git push
