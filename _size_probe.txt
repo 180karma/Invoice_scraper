@@ -1,1 +1,3 @@
-probe-f75c-size-check
+<!DOCTYPE html>
+<!--PROBE2K-->
+<html lang="en"><head><meta charset="utf-8"><title>Invoice Scraper probe</title></head><body><div id="app"><h1>probe</h1><script>const x = {a:1,b:'&lt;tag&gt;'};</script></div></body></html>
