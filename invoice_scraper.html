@@ -266,8 +266,29 @@ table.libsheet { border-collapse: separate; border-spacing: 0; width: max-conten
 .toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 9px 14px; border-radius: 10px; font-size: 13.5px; max-width: min(92vw, 480px); box-shadow: 0 8px 30px rgba(0,0,0,.35); z-index: 20; text-align: center; }
 .toast.bad { background: var(--bad); color: #fff; }
 .busy { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(9,26,22,.55); color: #fff; font: 600 18px var(--font-display); letter-spacing: .06em; text-transform: uppercase; text-align: center; padding: 20px; }
+.contacts { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 4px; }
+.contact { display: inline-flex; align-items: center; gap: 5px; min-height: 26px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--accent); font: 500 13px/1.2 var(--font-body); text-decoration: none; max-width: 100%; }
+.contact span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.contact svg { flex: none; }
+a.contact:hover { background: var(--wash); text-decoration: underline; text-underline-offset: 2px; }
+.contact.off { color: var(--muted); }
+.contacts.big .contact { min-height: 36px; padding: 4px 12px; font-size: 14px; }
+.libsheet .contact { min-height: 0; padding: 0 6px; border: 0; background: none; font-size: 12px; }
+.tpl .contacts .contact { min-height: 22px; font-size: 12px; padding: 1px 7px; }
+.pane label.chk { display: flex; gap: 8px; align-items: center; }
+.keysaved { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.modal .keysaved .pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 3px 10px; }
+.modal .keysaved .pill::before { margin-top: 0; }
+.modal h3.sec { margin: 6px 0 0; }
+.filebox { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
+.filebox .fname { font: 500 13px var(--font-data); overflow-wrap: anywhere; }
+.filebox p { margin: 0; }
+@media (pointer: coarse) { .contact { min-height: 36px; padding: 4px 12px; } .libsheet .contact { min-height: 0; padding: 0 6px; } }
 @media (max-width: 520px) {
   .dock.has-sel .zoomgrp { display: none; }
+  .status .contacts { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-right: -12px; padding-right: 12px; }
+  .status .contacts::-webkit-scrollbar { display: none; }
+  .status .contact { flex: none; }
   .dock { gap: 6px; }
   .tool { height: 38px; min-width: 36px; padding: 0 8px; gap: 6px; }
   .tool .lbl { display: none; }
@@ -1207,6 +1228,10 @@ const Engine = (() => {
       if (d) setF('date', d.value, 'auto', { raw: d.raw });
       const due = findDateField(p0, /\b(?:due\s*date|payment\s+due|due\s+by|due)\b\s*:?/i, opts.mdy);
       if (due) setF('due_date', due.value, 'auto', { raw: due.raw });
+      const ct = findContacts(p0);
+      if (ct.phones.length) setF('phone', ct.phones.join(', '), 'auto');
+      if (ct.emails.length) setF('email', ct.emails.join(', '), 'auto');
+      if (ct.website) setF('website', ct.website, 'auto');
     }
     // summary block: the last page that has one wins
     for (let pi = pages.length - 1; pi >= 0; pi--) {
@@ -1238,6 +1263,68 @@ const Engine = (() => {
     for (const t of res.totals) if (t.value != null) cands.push({ label: t.label, value: t.value });
     const hit = cands.find(c => Math.abs(c.value - sum) <= 0.02);
     return { sum, n, ok: !!hit, against: hit ? hit.label : (cands[0] ? cands[0].label : null), expected: hit ? hit.value : (cands[0] ? cands[0].value : null) };
+  }
+
+  /* ---------- supplier contact details ---------- */
+  const PHONE_RE = /(?:\+\s?61|\(\+?61\))[\s\-.]?(?:\(0\)|0)?[\s\-.]?[2-478](?:[\s\-.]?\d){8}|\(0[2-478]\)[\s\-.]?\d{4}[\s\-.]?\d{4}|0[2-478](?:[\s\-.]?\d){8}|1[38]00(?:[\s\-.]?\d){6}|13[\s\-.]?\d{2}[\s\-.]?\d{2}|\+\s?\d{1,3}(?:[\s\-.]?\(?\d+\)?){2,5}/g;
+  const EMAIL_RE = /[A-Z0-9._%+\-]+@[A-Z0-9\-]+(?:\.[A-Z0-9\-]+)*\.[A-Z]{2,}/gi;
+  const WEB_RE = /(?:https?:\/\/)?www\.[A-Z0-9\-]+(?:\.[A-Z0-9\-]+)+(?:\/[^\s,;]*)?|https?:\/\/[A-Z0-9\-]+(?:\.[A-Z0-9\-]+)+(?:\/[^\s,;]*)?/gi;
+  const NOT_PHONE_RE = /\b(abn|a\.b\.n|acn|bsb|acc(oun)?t|a\/c|invoice|inv|order|ref(erence)?|cust(omer)?|po|p\.o|licen[cs]e|lic|reg|serial|batch|lot|item|qty|date)\.?\s*(no\.?|num(ber)?|#)?\s*[:.#]?\s*$/i;
+  const FAX_RE = /\b(fax|f)\s*(no\.?|number|#)?\s*[:.]?\s*$/i;
+  const PHONE_LABEL_RE = /\b(ph(one)?|tel(ephone)?|mob(ile)?|cell|call|contact|enquiries|p|t|m)\s*(no\.?|number|#)?\s*[:.]?\s*$/i;
+  const CUSTOMER_RE = /^(bill(ed)?\s*to|invoice\s*to|sold\s*to|ship(ped)?[\s\-]*to|deliver(y|ed)?\s*(to|address)|customer\b|charge\s*to|attention|attn)/i;
+  const phoneKey = s => String(s || '').replace(/\(0\)/g, '').replace(/\D/g, '').replace(/^610?/, '0');
+  // a tel: link that dials from a phone anywhere: Australian numbers get +61, local-rate 13/1300/1800 numbers stay as dialled
+  function telHref(s) {
+    const raw = String(s || '').trim(), intl = /^\(?\+/.test(raw);
+    let d = raw.replace(/\(0\)/g, '').replace(/\D/g, '');
+    if (!d) return '';
+    if (intl) { if (/^610\d{9}$/.test(d)) d = '61' + d.slice(3); return d.length >= 7 && d.length <= 15 ? 'tel:+' + d : ''; }
+    if (/^00\d{7,15}$/.test(d)) return 'tel:+' + d.slice(2);
+    if (/^0[2-478]\d{8}$/.test(d)) return 'tel:+61' + d.slice(1);
+    if (/^61[2-478]\d{8}$/.test(d)) return 'tel:+' + d;
+    if (/^1[38]00\d{6}$/.test(d) || /^13\d{4}$/.test(d) || /^\d{8}$/.test(d)) return 'tel:' + d;
+    return d.length >= 6 && d.length <= 15 ? 'tel:' + d : '';
+  }
+  const isEmail = s => /^[A-Z0-9._%+\-]+@[A-Z0-9\-]+(?:\.[A-Z0-9\-]+)*\.[A-Z]{2,}$/i.test(String(s || '').trim());
+  function webHref(s) {
+    const t = String(s || '').trim().replace(/[.,;)]+$/, '');
+    if (!/^(https?:\/\/)?[A-Z0-9\-]+(\.[A-Z0-9\-]+)+(\/\S*)?$/i.test(t)) return '';
+    return /^https?:\/\//i.test(t) ? t : 'https://' + t;
+  }
+  // "08 9157 9865, 0412 345 678" or "a@b.com; c@d.com" -> one entry per number or address
+  const splitList = s => String(s || '').split(/\s*[,;\/|]\s*|\s{2,}|\s+or\s+/i).map(x => x.trim()).filter(Boolean);
+  // the issuer's phone numbers, emails and website, leaving out the customer's block and anything labelled fax, ABN or account
+  function findContacts(page) {
+    const out = { phones: [], emails: [], website: '' };
+    if (!page || !page.hasText) return out;
+    const all = page.lines.flatMap(L => L.segs);
+    const blocks = all.filter(s => CUSTOMER_RE.test(s.text)).map(s => ({ x0: s.x0 - 8, x1: s.x0 + Math.max(page.w * 0.3, s.x1 - s.x0), y0: s.y0 - 2, y1: s.y1 + 9 * s.h }));
+    const inCustomer = s => blocks.some(b => s.x0 >= b.x0 && s.x0 <= b.x1 && s.y0 >= b.y0 && s.y0 <= b.y1);
+    const phones = [], seenP = new Set(), seenE = new Set();
+    for (const L of page.lines) L.segs.forEach((s, si) => {
+      if (inCustomer(s)) return;
+      const t = s.text, prev = si ? L.segs[si - 1].text + ' ' : '';
+      let m; EMAIL_RE.lastIndex = 0;
+      while ((m = EMAIL_RE.exec(t))) { const e = m[0].toLowerCase().replace(/^mailto:/, ''); if (!seenE.has(e)) { seenE.add(e); out.emails.push(e); } }
+      if (!out.website) { WEB_RE.lastIndex = 0; const w = WEB_RE.exec(t.replace(EMAIL_RE, ' ')); if (w) out.website = w[0].replace(/[.,;)]+$/, ''); }
+      PHONE_RE.lastIndex = 0;
+      while ((m = PHONE_RE.exec(t))) {
+        const before = t[m.index - 1] || '', after = t[m.index + m[0].length] || '';
+        if (/[\w\/.\-]/.test(before) && !/[\s(]/.test(before)) continue;
+        if (/[\d\/]/.test(after)) continue;
+        const own = t.slice(0, m.index), ctx = (own.trim() ? own : prev).slice(-40), key = phoneKey(m[0]);
+        if (FAX_RE.test(ctx) || NOT_PHONE_RE.test(ctx)) continue;
+        const labelled = PHONE_LABEL_RE.test(ctx), shaped = /[\s\-.()]/.test(m[0].trim()) || /^(\+|04|1[38]00)/.test(m[0].trim());
+        if (/^13\d{4}$/.test(key) && !labelled) continue;
+        if (!labelled && !shaped) continue;
+        if (key.length < 6 || seenP.has(key)) continue;
+        seenP.add(key); phones.push({ v: m[0].replace(/\s+/g, ' ').trim(), labelled, y: s.y0 });
+      }
+    });
+    phones.sort((a, b) => (b.labelled - a.labelled) || a.y - b.y);
+    out.phones = phones.slice(0, 3).map(p => p.v); out.emails = out.emails.slice(0, 3);
+    return out;
   }
 
   /* ---------- supplier recognition ---------- */
@@ -1272,6 +1359,7 @@ const Engine = (() => {
     const head = [];
     if (opts.meta) head.push('Supplier', 'Invoice No', 'Invoice Date', ...customLabels);
     cols.forEach(c => head.push(c.name));
+    if (opts.contacts) head.push('Supplier Phone', 'Supplier Email');
     const lines = [];
     if (opts.header !== false) lines.push(head.map(csvCell).join(','));
     for (const d of docs) {
@@ -1288,6 +1376,7 @@ const Engine = (() => {
           if (opts.clean !== false && c.key && FIELD_BY_KEY[c.key].numeric) v = cleanNum(v);
           out.push(guard(v));
         });
+        if (opts.contacts) out.push(guard(f.phone ? String(f.phone.value) : ''), guard(f.email ? String(f.email.value) : ''));
         lines.push(out.map(csvCell).join(','));
       }
     }
@@ -1296,7 +1385,7 @@ const Engine = (() => {
 
   return { FIELDS, FIELD_BY_KEY, UOM_VOCAB, norm, isNum, toNum, prepPage, buildLines, wordsIn, mapHeader, extractTable, detect, extract,
     fingerprint, scoreTemplate, buildCSV, parseDate, fmtDate, zoneText, findTable, colId, checkAmounts, docType,
-    csvCell, guard, zoneSpec, placeZones, fitTable, anchorFor, snapZone };
+    csvCell, guard, zoneSpec, placeZones, fitTable, anchorFor, snapZone, findContacts, telHref, webHref, isEmail, splitList, phoneKey };
 })();
 
 /* ===================================================================
@@ -1314,6 +1403,10 @@ const Library = (() => {
   const srcOf = s => (s === 'gemini' ? 'gemini' : s === 'claude' || s === 'ai' ? 'claude' : 'text');   // 'ai' is the older name for Claude
   const empty = () => ({ v: 1, invoices: {}, hidden: {}, ignored: {} });
   const r4 = v => Math.round(v * 10000) / 10000, r2 = v => Math.round(v * 100) / 100;
+  function contactsInto(inv, c) {
+    const phone = str(c && c.phone, 120), email = str(c && c.email, 200), website = str(c && c.website, 200);
+    if (phone) inv.phone = phone; if (email) inv.email = email; if (website) inv.website = website;
+  }
 
   // same supplier + same invoice number = the same invoice, however many times it is opened
   function invoiceKey(m) {
@@ -1326,6 +1419,7 @@ const Library = (() => {
     const total = typeof val('total') === 'number' ? val('total') : toNum(val('total'));
     const inv = { key: '', supplier: str(val('supplier'), 120), abn: String(val('abn') || '').replace(/\D/g, '').slice(0, 11), invoice_no: str(val('invoice_no'), 60),
       date: isIso(val('date')) ? val('date') : '', total: total == null ? null : total, file: str(meta && meta.file, 160), src: srcOf(meta && meta.src), lines: [] };
+    contactsInto(inv, { phone: val('phone'), email: val('email'), website: val('website') });
     const at = {}; (result.columns || []).forEach((c, j) => { if (c.key && at[c.key] == null) at[c.key] = j; });
     for (const r of result.rows || []) {
       const L = {};
@@ -1346,6 +1440,7 @@ const Library = (() => {
       if (!i || typeof i !== 'object' || !Array.isArray(i.lines)) continue;
       const inv = { key: '', supplier: str(i.supplier, 120), abn: String(i.abn || '').replace(/\D/g, '').slice(0, 11), invoice_no: str(i.invoice_no, 60), date: isIso(i.date) ? i.date : '',
         total: typeof i.total === 'number' && isFinite(i.total) ? i.total : null, file: str(i.file, 160), src: srcOf(i.src), added: str(i.added, 30), updated: str(i.updated, 30), lines: [] };
+      contactsInto(inv, i);
       for (const l of i.lines.slice(0, 2000)) {
         if (!l || typeof l !== 'object') continue;
         const L = {};
@@ -1443,7 +1538,7 @@ const Library = (() => {
         if (typeof L.amount === 'number') it.spend += L.amount;
         it.lines++; it.invs.add(inv.key); it.lastDate = when(inv);
         if (typeof L.unit_price === 'number') it.prices.push({ inv: inv.key, price: L.unit_price });
-        const rec = Object.assign({ inv: inv.key, item: id, date: when(inv), supplier: inv.supplier, invoice_no: inv.invoice_no }, L);
+        const rec = Object.assign({ inv: inv.key, item: id, date: when(inv), supplier: inv.supplier, invoice_no: inv.invoice_no, phone: inv.phone || '', email: inv.email || '' }, L);
         it.history.push(rec); records.push(rec);
       }
     }
@@ -1469,8 +1564,8 @@ const Library = (() => {
     return out.join('\r\n');
   }
   function recordsCSV(agg, dateStyle) {
-    const out = [['Supplier', 'Invoice No', 'Invoice Date', ...Engine.FIELDS.map(f => f.label)].join(',')];
-    for (const r of agg.records.slice().reverse()) out.push([r.supplier, r.invoice_no, Engine.fmtDate(r.date, dateStyle), ...COLS.map(k => r[k])].map(C).join(','));
+    const out = [['Supplier', 'Invoice No', 'Invoice Date', ...Engine.FIELDS.map(f => f.label), 'Supplier Phone', 'Supplier Email'].join(',')];
+    for (const r of agg.records.slice().reverse()) out.push([r.supplier, r.invoice_no, Engine.fmtDate(r.date, dateStyle), ...COLS.map(k => r[k]), r.phone, r.email].map(C).join(','));
     return out.join('\r\n');
   }
   return { empty, invoiceKey, record, clean, merge, aggregate, itemsCSV, recordsCSV, lineFromRow, itemKey, lineId, ignoreHits, keyIsIgnored };
@@ -1502,7 +1597,7 @@ const S = {
   docs: [], cur: -1, page: 0, view: { s: 1, tx: 0, ty: 0 }, tool: 'pan', sel: null, pending: null, band: null,
   tab: 'items', opts: { meta: true, clean: true, dateStyle: 'iso', scope: 'this', mdy: false },
   templates: [], caps: { downloads: null, sample: null, img: null }, standalone: !(window.claude && typeof window.claude.use === 'function'),
-  touchedOnce: false, aiCtl: null,
+  touchedOnce: false, aiCtl: null, autoTpl: true,
   lib: { view: 'items', q: '', open: null, limit: 120, armed: false, order: { items: ['lastDate', 'desc'], records: ['date', 'desc'], invoices: ['date', 'desc'] } },
 };
 const cur = () => S.docs[S.cur] || null;
@@ -1540,38 +1635,201 @@ async function pageImages(lib, pg, vp) {
   }
   return out;
 }
+// one PDF page as the engine sees it, turned by `rot` degrees clockwise on top of the page's own /Rotate (which pdf.js applies)
+async function pdfPageModel(pg, rot) {
+  const lib = window.pdfjsLib, vp = pg.getViewport({ scale: 1, rotation: (pg.rotate + (rot || 0)) % 360 });
+  const tc = pg._tc || (pg._tc = await pg.getTextContent()), items = [];
+  for (const it of tc.items) {
+    if (!it.str || !it.str.trim()) continue;
+    const m = lib.Util.transform(vp.transform, it.transform);
+    if (Math.abs(m[1]) > Math.abs(m[0]) || m[0] < 0) continue;            // sideways or upside-down text
+    const h = Math.hypot(m[2], m[3]) || it.height || 10;
+    items.push({ s: it.str, x: m[4], y: m[5] - h, w: it.width, h });
+  }
+  let images = []; try { images = await pageImages(lib, pg, vp); } catch (e) {}
+  return { w: vp.width, h: vp.height, items, images };
+}
+// which way the text layer runs: degrees clockwise that make most of it read left to right, or 0 when it already does or is unclear
+function textTurn(lib, pg, tc) {
+  const vp = pg.getViewport({ scale: 1 }), n = [0, 0, 0, 0];
+  for (const it of tc.items) {
+    const s = (it.str || '').trim(); if (!s) continue;
+    const m = lib.Util.transform(vp.transform, it.transform), a = m[0], b = m[1];
+    n[Math.abs(a) >= Math.abs(b) ? (a > 0 ? 0 : 2) : (b > 0 ? 1 : 3)] += s.length;
+  }
+  const T = n[0] + n[1] + n[2] + n[3], k = n.indexOf(Math.max(...n));
+  return T >= 20 && k && n[k] > 0.6 * T ? [0, 270, 180, 90][k] : 0;
+}
 async function loadPdf(file) {
   const lib = await ensurePdf();
   const data = new Uint8Array(await file.arrayBuffer());
   const pdf = await lib.getDocument({ data, isEvalSupported: false }).promise;
-  const n = Math.min(pdf.numPages, 40), pages = [];
+  const n = Math.min(pdf.numPages, 40), pages = [], turned = [];
   for (let i = 1; i <= n; i++) {
-    const pg = await pdf.getPage(i), vp = pg.getViewport({ scale: 1 });
-    const tc = await pg.getTextContent(), items = [];
-    for (const it of tc.items) {
-      if (!it.str || !it.str.trim()) continue;
-      const m = lib.Util.transform(vp.transform, it.transform);
-      if (Math.abs(m[1]) > Math.abs(m[0])) continue;                       // sideways text
-      const h = Math.hypot(m[2], m[3]) || it.height || 10;
-      items.push({ s: it.str, x: m[4], y: m[5] - h, w: it.width, h });
+    const pg = await pdf.getPage(i);
+    const tc = pg._tc = await pg.getTextContent();
+    let rot = textTurn(lib, pg, tc), how = rot ? 'text' : '';
+    let m = await pdfPageModel(pg, rot);
+    if (m.items.length <= 3 && i <= 12) {                                  // a scanned page: look at the ink instead
+      try {
+        const vp = pg.getViewport({ scale: 1 }), k = 1400 / Math.max(vp.width, vp.height), v2 = pg.getViewport({ scale: k });
+        const c = document.createElement('canvas'); c.width = Math.round(v2.width); c.height = Math.round(v2.height);
+        const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+        await pg.render({ canvasContext: ctx, viewport: v2 }).promise;
+        const o = inkTurn(c); c.width = 0;
+        if (o.deg) { rot = o.deg; how = 'ink'; m = await pdfPageModel(pg, rot); }
+      } catch (e) {}
     }
-    let images = []; try { images = await pageImages(lib, pg, vp); } catch (e) {}
-    pages.push({ w: vp.width, h: vp.height, items, images, _pdf: pg, canvas: null });
+    if (rot) turned.push({ page: i - 1, deg: rot, by: how });
+    pages.push(Object.assign(m, { _pdf: pg, rot, canvas: null }));
   }
-  return newDoc(file.name, 'pdf', pages, { cut: pdf.numPages > n ? pdf.numPages : 0 });
+  return newDoc(file.name, 'pdf', pages, { cut: pdf.numPages > n ? pdf.numPages : 0, orient: turned.length ? { deg: turned[0].deg, by: turned[0].by, pages: turned.length } : null });
 }
 async function decodeImage(file) {
   if (window.createImageBitmap) { try { return await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch (e) {} }
   return await new Promise((res, rej) => { const u = URL.createObjectURL(file), im = new Image(); im.onload = () => { res(im); URL.revokeObjectURL(u); }; im.onerror = () => { URL.revokeObjectURL(u); rej({ code: 'image' }); }; im.src = u; });
 }
 async function loadImage(file) {
+  const ex = await exifOrientation(file);
   const bmp = await decodeImage(file);
   const bw = bmp.width || bmp.naturalWidth, bh = bmp.height || bmp.naturalHeight;
   if (!bw || !bh) throw { code: 'image' };
-  const k = Math.min(1, 2400 / Math.max(bw, bh));
-  const c = document.createElement('canvas'); c.width = Math.round(bw * k); c.height = Math.round(bh * k);
-  const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height); ctx.drawImage(bmp, 0, 0, c.width, c.height);
-  return newDoc(file.name, 'image', [{ w: 600, h: 600 * c.height / c.width, items: [], images: [], canvas: c }]);
+  // modern browsers turn photos by their EXIF tag while decoding; older ones do not, so check the size and do it here if needed
+  const swapped = ex.o >= 5 && ex.o <= 8, applied = ex.o === 1 || (swapped ? (ex.w && ex.h ? bw === ex.h && bh === ex.w : true) : exifByCss());
+  const o = applied ? 1 : ex.o, side = o >= 5;
+  const k = Math.min(1, 2400 / Math.max(bw, bh)), dw = Math.round(bw * k), dh = Math.round(bh * k);
+  let c = document.createElement('canvas'); c.width = side ? dh : dw; c.height = side ? dw : dh;
+  const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+  ctx.setTransform(...EXIF_T[o](dw, dh)); ctx.drawImage(bmp, 0, 0, dw, dh); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  let orient = ex.o > 1 ? { deg: EXIF_DEG[ex.o], by: 'photo', pages: 1 } : null;
+  const t = inkTurn(c);
+  if (t.deg) { c = rotCanvas(c, t.deg); orient = { deg: ((orient ? orient.deg : 0) + t.deg) % 360, by: orient ? 'photo+ink' : 'ink', pages: 1 }; }
+  return newDoc(file.name, 'image', [{ w: 600, h: 600 * c.height / c.width, items: [], images: [], canvas: c }], { orient });
+}
+
+/* ================= orientation: photos, scans and sideways PDFs are turned upright before reading ================= */
+const EXIF_DEG = [0, 0, 0, 180, 180, 90, 90, 270, 270];
+// canvas transforms for EXIF orientations 1-8, drawing a w x h image upright
+const EXIF_T = [null, () => [1, 0, 0, 1, 0, 0], w => [-1, 0, 0, 1, w, 0], (w, h) => [-1, 0, 0, -1, w, h], (w, h) => [1, 0, 0, -1, 0, h],
+  () => [0, 1, 1, 0, 0, 0], (w, h) => [0, 1, -1, 0, h, 0], (w, h) => [0, -1, -1, 0, h, w], (w, h) => [0, -1, 1, 0, 0, w]];
+const exifByCss = () => { try { return CSS.supports('image-orientation', 'from-image'); } catch (e) { return true; } };
+async function exifOrientation(file) {
+  const out = { o: 1, w: 0, h: 0 };
+  try {
+    if (!/jpe?g$/i.test(file.type || '') && !/\.jpe?g$/i.test(file.name || '')) return out;
+    const b = new DataView(await file.slice(0, 262144).arrayBuffer());
+    if (b.getUint16(0) !== 0xFFD8) return out;
+    let off = 2;
+    while (off + 9 < b.byteLength) {
+      const mk = b.getUint16(off), len = b.getUint16(off + 2);
+      if ((mk & 0xFF00) !== 0xFF00) break;
+      if (mk === 0xFFE1 && b.getUint32(off + 4) === 0x45786966) {
+        const t = off + 10, le = b.getUint16(t) === 0x4949, ifd = t + b.getUint32(t + 4, le), n = b.getUint16(ifd, le);
+        for (let i = 0; i < n; i++) { const e = ifd + 2 + i * 12; if (b.getUint16(e, le) === 0x0112) { const o = b.getUint16(e + 8, le); if (o >= 1 && o <= 8) out.o = o; break; } }
+      } else if (mk >= 0xFFC0 && mk <= 0xFFCF && mk !== 0xFFC4 && mk !== 0xFFC8 && mk !== 0xFFCC) { out.h = b.getUint16(off + 5); out.w = b.getUint16(off + 7); break; }
+      off += 2 + len;
+    }
+  } catch (e) {}
+  return out;
+}
+function rotCanvas(src, deg) {
+  deg = ((deg % 360) + 360) % 360; if (!deg) return src;
+  const c = document.createElement('canvas'), side = deg === 90 || deg === 270;
+  c.width = side ? src.height : src.width; c.height = side ? src.width : src.height;
+  const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+  x.translate(c.width / 2, c.height / 2); x.rotate(deg * Math.PI / 180); x.drawImage(src, -src.width / 2, -src.height / 2);
+  return c;
+}
+// a cheap look at the ink of a picture page: printed lines make sharp steps across the line direction, and Latin
+// text has more ink above its middle band (capitals, b d f h k l t) than below it (g j p q y).
+// Returns the degrees clockwise that make the page upright, or 0 when it already is or the signal is weak.
+function inkTurn(src) {
+  try {
+    const k = Math.min(1, 1400 / Math.max(src.width, src.height)), W = Math.max(8, Math.round(src.width * k)), H = Math.max(8, Math.round(src.height * k));
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); ctx.drawImage(src, 0, 0, W, H);
+    const d = ctx.getImageData(0, 0, W, H).data, n = W * H, lum = new Uint8Array(n), hist = new Uint32Array(256);
+    for (let i = 0; i < n; i++) { const v = (d[i * 4] * 77 + d[i * 4 + 1] * 150 + d[i * 4 + 2] * 29) >> 8; lum[i] = v; hist[v]++; }
+    let acc = 0, paper = 255; for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= n * 0.6) { paper = v; break; } }
+    if (paper < 110) return { deg: 0 };
+    const cut = paper * 0.62, ink = new Uint8Array(n); let total = 0;
+    for (let i = 0; i < n; i++) if (lum[i] < cut) { ink[i] = 1; total++; }
+    if (total < n * 0.003 || total > n * 0.4) return { deg: 0 };
+    // grid of strips so columns with different baselines do not blur each other
+    const sharp = (rows) => {
+      const L = rows ? H : W, M = rows ? W : H, strips = 6, sw = Math.ceil(M / strips); let s = 0;
+      for (let st = 0; st < strips; st++) {
+        const prof = new Float32Array(L), a = st * sw, b = Math.min(M, a + sw);
+        for (let p = 0; p < L; p++) { let cnt = 0; for (let q = a; q < b; q++) cnt += rows ? ink[p * W + q] : ink[q * W + p]; prof[p] = cnt; }
+        for (let p = 1; p < L; p++) { const dd = prof[p] - prof[p - 1]; s += dd * dd; }
+      }
+      return s;
+    };
+    const sh = sharp(true), sv = sharp(false);
+    let base;
+    if (sh >= sv * 1.35) base = 0; else if (sv >= sh * 1.35) base = 90; else return { deg: 0 };
+    // ascender vs descender ink, on lines running across: base 0 reads rows top to bottom, base 90 reads columns
+    const L = base ? W : H, M = base ? H : W, strips = 6, sw = Math.ceil(M / strips); let A = 0, D = 0, lines = 0;
+    const at = (p, q) => base ? ink[(H - 1 - q) * W + p] : ink[p * W + q];      // base 90: turning clockwise puts the left edge on top
+    for (let st = 0; st < strips; st++) {
+      const a = st * sw, b = Math.min(M, a + sw), prof = new Float32Array(L);
+      for (let p = 0; p < L; p++) { let cnt = 0; for (let q = a; q < b; q++) cnt += at(p, q); prof[p] = cnt; }
+      const on = Math.max(1, (b - a) * 0.01);
+      for (let p = 0; p < L;) {
+        if (prof[p] < on) { p++; continue; }
+        let e = p; while (e < L && prof[e] >= on) e++;
+        const h = e - p;
+        if (h >= 6 && h <= 60) {
+          let mx = 0; for (let r = p; r < e; r++) mx = Math.max(mx, prof[r]);
+          if (mx < (b - a) * 0.85) {                                           // a ruled line is not text
+            let c0 = -1, c1 = -1; for (let r = p; r < e; r++) if (prof[r] >= mx * 0.5) { if (c0 < 0) c0 = r; c1 = r; }
+            let up = 0, dn = 0; for (let r = p; r < c0; r++) up += prof[r]; for (let r = c1 + 1; r < e; r++) dn += prof[r];
+            if (c1 - c0 >= 2) { A += up; D += dn; lines++; }
+          }
+        }
+        p = e;
+      }
+    }
+    if (lines < 6 || A + D < 50) return { deg: base };
+    const r = (A + 1) / (D + 1);
+    if (r >= 1.15) return { deg: base, ratio: r };
+    if (r <= 1 / 1.15) return { deg: (base + 180) % 360, ratio: r };
+    return { deg: base, ratio: r };
+  } catch (e) { return { deg: 0 }; }
+}
+// turn one page by `deg` clockwise; the page is read again afterwards by reanalyse()
+async function turnPage(doc, pi, deg) {
+  const p = doc.pages[pi]; deg = ((deg % 360) + 360) % 360;
+  if (!p || !deg || doc.sample) return false;
+  if (p._pdf) {
+    p.rot = ((p.rot || 0) + deg) % 360;
+    Object.assign(p, await pdfPageModel(p._pdf, p.rot));
+    if (p.canvas) p.canvas.width = 0; p.canvas = null;
+  } else if (p.canvas) {
+    p.canvas = rotCanvas(p.canvas, deg); p.w = 600; p.h = 600 * p.canvas.height / p.canvas.width;
+  } else return false;
+  p._prepped = false; delete doc._lt;
+  return true;
+}
+async function reanalyse(doc) {
+  doc.zones = []; doc.ai = null; doc.mode = 'text'; doc.aiMap = {}; doc.edits = {}; doc.gemPlaced = 0; doc.aiError = ''; doc.aiStale = false;
+  doc.tplId = null; doc.tplWhy = []; S.sel = null; S.pending = null;
+  await analyse(doc);
+}
+async function turnByHand(doc) {
+  if (!doc || doc.aiBusy) return;
+  if (doc.sample) { toast('The sample invoice is already upright.'); return; }
+  busy('Turning the page');
+  try {
+    if (!(await turnPage(doc, S.page, 90))) { busy(null); return; }
+    const o = doc.orient || { deg: 0 };
+    doc.orient = { deg: (o.deg + 90) % 360, by: 'hand', pages: 1 };
+    await reanalyse(doc);
+  } catch (e) { busy(null); toast('This page could not be turned.', 'bad'); return; }
+  busy(null);
+  await showPage(); fit(); renderAll();
+  if (queueGemini(doc)) pumpGemini();
+  toast('Page turned a quarter to the right. Its boxes were placed again.');
 }
 function loadSample() {
   return new Promise((res, rej) => {
@@ -1588,7 +1846,7 @@ async function ensureCanvas(doc, pi) {
   if (p.canvas) return p.canvas;
   if (p._pdf) {
     const R = clamp((window.devicePixelRatio || 1) * 1.25, 2, 3);
-    const vp = p._pdf.getViewport({ scale: R });
+    const vp = p._pdf.getViewport({ scale: R, rotation: (p._pdf.rotate + (p.rot || 0)) % 360 });
     const c = document.createElement('canvas'); c.width = Math.round(vp.width); c.height = Math.round(vp.height);
     const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
     await p._pdf.render({ canvasContext: ctx, viewport: vp }).promise;
@@ -1598,26 +1856,30 @@ async function ensureCanvas(doc, pi) {
   }
   return p.canvas;
 }
+// files: File objects, or { file, handle } when the browser gave a handle (Open button or drag-and-drop in Chrome/Edge)
 async function addFiles(files) {
-  const list = Array.from(files || []).filter(f => f && (f.size || f.name));
+  const list = Array.from(files || []).map(x => (x && x.file ? x : { file: x, handle: null })).filter(x => x.file && (x.file.size || x.file.name));
   if (!list.length) return;
-  let first = null, nNew = 0, nOld = 0, cutMsg = '';
-  for (const f of list) {
+  let first = null, nNew = 0, nOld = 0, nTpl = 0, cutMsg = '';
+  for (const { file: f, handle } of list) {
     busy('Reading ' + f.name);
     try {
       const isPdf = /pdf$/i.test(f.type || '') || /\.pdf$/i.test(f.name || '');
       const doc = isPdf ? await loadPdf(f) : await loadImage(f);
+      doc.file = f; doc.handle = handle || null;
       const si = S.docs.findIndex(d => d.sample); if (si >= 0) S.docs.splice(si, 1);
       S.docs.push(doc); if (!first) first = doc;
       await analyse(doc);
       queueGemini(doc);
+      const tr = await maybeAutoTpl(doc); if (tr && tr.isNew) { nTpl++; run(doc); }
       const how = Lib.sync(doc); if (how === 'new') nNew++; else if (how === 'replaced') nOld++;
       if (doc.cut) cutMsg = ' Only the first 40 of ' + doc.cut + ' pages were read.';
     } catch (e) { toast(loadError(e, f), 'bad'); }
   }
   busy(null);
-  if (nNew || nOld) toast((nNew ? nNew + ' invoice' + pl(nNew) + ' added to the library.' : '') + (nOld ? (nNew ? ' ' : '') + nOld + ' already there, so ' + (nOld === 1 ? 'its record was' : 'their records were') + ' refreshed, not added twice.' : '') + cutMsg);
-  else if (cutMsg) toast(cutMsg.trim());
+  const tplMsg = nTpl ? ' ' + (nTpl === 1 ? 'A new supplier layout was' : nTpl + ' new supplier layouts were') + ' saved automatically.' : '';
+  if (nNew || nOld) toast((nNew ? nNew + ' invoice' + pl(nNew) + ' added to the library.' : '') + (nOld ? (nNew ? ' ' : '') + nOld + ' already there, so ' + (nOld === 1 ? 'its record was' : 'their records were') + ' refreshed, not added twice.' : '') + tplMsg + cutMsg);
+  else if (cutMsg || tplMsg) toast((tplMsg + cutMsg).trim());
   if (first) { S.cur = S.docs.indexOf(first); S.page = 0; S.sel = null; S.pending = null; await showPage(); fit(); }
   else if (S.cur >= S.docs.length) S.cur = S.docs.length - 1;
   renderAll();
@@ -1675,11 +1937,11 @@ function applyTemplate(doc, tpl, why) {
     if (!p.hasText || doc.zones.some(z => z.type === 'table' && z.page === pi)) return;
     const t = Engine.findTable(p); if (t) doc.zones.push({ id: uid(), type: 'table', page: pi, rect: t.rect, dyn: 'auto', map: Object.assign({}, first ? first.map : {}), src: 'auto' });
   });
-  doc.tplId = tpl.id; doc.tplWhy = why || []; doc.touched = false;
+  doc.tplId = tpl.id; doc.tplWhy = why || []; doc.touched = false; doc.userEdit = false;
 }
 function autoZones(doc) {
   doc.zones = Engine.detect(doc.pages, { mdy: S.opts.mdy }).map(z => Object.assign({ id: uid(), src: 'auto', dyn: 'auto' }, z));
-  doc.tplId = null; doc.tplWhy = []; doc.touched = false;
+  doc.tplId = null; doc.tplWhy = []; doc.touched = false; doc.userEdit = false;
 }
 // scan the page again and place the automatic boxes afresh; boxes drawn by hand stay where they are
 async function rescan(doc) {
@@ -1722,7 +1984,16 @@ function run(doc) {
     for (const t of res.tables) t.columns.forEach((c, j) => { if (c.skip) res.skipped.push({ name: c.name || 'Column ' + (j + 1), zoneId: t.zoneId, srcIndex: j }); });
   }
   const tpl = doc.tplId ? S.templates.find(t => t.id === doc.tplId) : null;
-  if (tpl) { if (!res.fields.supplier && tpl.name) res.fields.supplier = { value: tpl.name, src: 'layout' }; if (!res.fields.abn && tpl.abn) res.fields.abn = { value: tpl.abn, src: 'layout' }; }
+  if (doc.mode === 'ai' && doc.pages[0] && doc.pages[0].hasText) {
+    const ct = Engine.findContacts(doc.pages[0]);
+    if (!res.fields.phone && ct.phones.length) res.fields.phone = { value: ct.phones.join(', '), src: 'auto' };
+    if (!res.fields.email && ct.emails.length) res.fields.email = { value: ct.emails.join(', '), src: 'auto' };
+    if (!res.fields.website && ct.website) res.fields.website = { value: ct.website, src: 'auto' };
+  }
+  if (tpl) {
+    if (!res.fields.supplier && tpl.name) res.fields.supplier = { value: tpl.name, src: 'layout' }; if (!res.fields.abn && tpl.abn) res.fields.abn = { value: tpl.abn, src: 'layout' };
+    for (const k of ['phone', 'email', 'website']) if (!res.fields[k] && tpl[k]) res.fields[k] = { value: tpl[k], src: 'layout' };
+  }
   if (doc.pages[0] && !doc.pages[0].hasText && doc.mode !== 'ai') res.docType = doc.pages[0].garbled ? 'Unreadable text' : 'Scanned page';
   for (const [k, v] of Object.entries(doc.manual)) {
     if (v === '' || v == null) continue;
@@ -1740,6 +2011,8 @@ function run(doc) {
   doc.result = res;
   if (doc.libState === 'empty') doc.libState = '';
   queueSync(doc);
+  queueAutoTpl(doc);
+  queueFileSave(doc);
 }
 function dropIgnored(res) {
   const ignored = (Lib.store && Lib.store.ignored) || {};
@@ -1916,7 +2189,7 @@ document.addEventListener('keydown', e => {
   if (d) { e.preventDefault(); const k = e.shiftKey ? 10 : 1, p = doc.pages[z.page]; z.rect = fitRect({ x: z.rect.x + d[0] * k, y: z.rect.y + d[1] * k, w: z.rect.w, h: z.rect.h }, p); changed(doc, z); run(doc); layoutZones(); renderStatus(); renderTab(); }
 });
 
-function changed(doc, z) { doc.touched = true; S.touchedOnce = true; if (z) { z.src = 'user'; delete z.dyn; } if (doc.mode === 'ai') doc.aiStale = true; }
+function changed(doc, z) { doc.touched = true; doc.userEdit = true; S.touchedOnce = true; if (z) { z.src = 'user'; delete z.dyn; } if (doc.mode === 'ai') doc.aiStale = true; }
 function setTool(t) { S.tool = t; S.pending = null; if (t === 'draw') S.sel = null; stage.classList.toggle('draw', t === 'draw'); layoutZones(); renderDock(); }
 function select(id) {
   const doc = cur(); if (!doc) return;
@@ -1947,6 +2220,7 @@ const IC = {
   prev: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
   next: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>',
   bin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"/></svg>',
+  turn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>',
 };
 function renderDock() {
   const doc = cur(), dock = $('#dock'), picker = $('#picker'), hint = $('#hint');
@@ -1967,7 +2241,8 @@ function renderDock() {
       '<button class="tool" type="button" data-act="done-zone">Done</button></div>';
   } else {
     left = '<div class="grp"><button class="tool hot" type="button" data-act="draw" aria-pressed="' + (S.tool === 'draw') + '">' + IC.box + (S.tool === 'draw' ? 'Cancel' : 'Draw box') + '</button>' +
-      (S.tool === 'draw' ? '' : '<button class="tool" type="button" data-act="scan" aria-label="Scan this invoice and place the boxes automatically" title="Scan this invoice and place the boxes automatically">' + IC.scan + '<span class="lbl">Scan</span></button>') + '</div>';
+      (S.tool === 'draw' ? '' : '<button class="tool" type="button" data-act="scan" aria-label="Scan this invoice and place the boxes automatically" title="Scan this invoice and place the boxes automatically">' + IC.scan + '<span class="lbl">Scan</span></button>' +
+        (doc.sample ? '' : '<button class="tool" type="button" data-act="turn" aria-label="Turn this page a quarter to the right" title="Turn this page a quarter to the right">' + IC.turn + '<span class="lbl">Turn</span></button>')) + '</div>';
   }
   const pg = doc.pages.length > 1 ? '<div class="grp"><button class="tool" type="button" data-act="prev" aria-label="Previous page"' + (S.page === 0 ? ' disabled' : '') + '>' + IC.prev + '</button><span class="pg">' + (S.page + 1) + ' / ' + doc.pages.length + '</span><button class="tool" type="button" data-act="next" aria-label="Next page"' + (S.page >= doc.pages.length - 1 ? ' disabled' : '') + '>' + IC.next + '</button></div>' : '';
   const zoom = '<div class="grp zoomgrp"><button class="tool" type="button" data-act="zout" aria-label="Zoom out">' + IC.minus + '</button><button class="tool" type="button" data-act="fit" aria-label="Fit page">' + IC.fit + '</button><button class="tool" type="button" data-act="zin" aria-label="Zoom in">' + IC.plus + '</button></div>';
@@ -1990,6 +2265,7 @@ $('#viewer').addEventListener('click', e => {
   switch (b.dataset.act) {
     case 'draw': S.touchedOnce = true; setTool(S.tool === 'draw' ? 'pan' : 'draw'); break;
     case 'scan': rescan(doc); break;
+    case 'turn': turnByHand(doc); break;
     case 'cancel-box': S.pending = null; layoutZones(); renderDock(); break;
     case 'del-zone': removeZone(S.sel); break;
     case 'done-zone': select(null); break;
@@ -2016,6 +2292,22 @@ const niceDate = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
 const fmtAbn = a => { a = String(a || '').replace(/\D/g, ''); return a.length === 11 ? a.slice(0, 2) + ' ' + a.slice(2, 5) + ' ' + a.slice(5, 8) + ' ' + a.slice(8) : a; };
 const money = v => typeof v === 'number' ? v.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : String(v == null ? '' : v);
 const pill = (kind, html) => '<span class="pill ' + kind + '">' + html + '</span>';
+const CI = {
+  tel: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>',
+  mail: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>',
+  web: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>',
+};
+const telLink = v => { const h = Engine.telHref(v); return h ? '<a class="contact" href="' + esc(h) + '" title="Call ' + esc(v) + '">' + CI.tel + '<span>' + esc(v) + '</span></a>' : '<span class="contact off">' + esc(v) + '</span>'; };
+const mailLink = v => Engine.isEmail(v) ? '<a class="contact" href="mailto:' + esc(v.trim()) + '" title="Email ' + esc(v) + '">' + CI.mail + '<span>' + esc(v) + '</span></a>' : '<span class="contact off">' + esc(v) + '</span>';
+const webLink = v => { const h = Engine.webHref(v); return h ? '<a class="contact" href="' + esc(h) + '" target="_blank" rel="noopener" title="Open ' + esc(v) + '">' + CI.web + '<span>' + esc(String(v).replace(/^https?:\/\//i, '')) + '</span></a>' : ''; };
+function contactLinks(c, noWeb) {
+  const out = [];
+  Engine.splitList(c && c.phone).forEach(p => out.push(telLink(p)));
+  Engine.splitList(c && c.email).forEach(e => out.push(mailLink(e)));
+  if (c && c.website && !noWeb) { const w = webLink(c.website); if (w) out.push(w); }
+  return out;
+}
+const fieldContacts = f => ({ phone: f.phone ? String(f.phone.value) : '', email: f.email ? String(f.email.value) : '', website: f.website ? String(f.website.value) : '' });
 function logoThumb(doc) {
   const z = doc.zones.find(o => o.type === 'logo'); if (!z) return '';
   const key = [z.page, z.rect.x, z.rect.y, z.rect.w, z.rect.h].map(n => Math.round(n)).join(',');
@@ -2049,13 +2341,31 @@ function renderStatus() {
     if (why === 'picture' || why === 'garbled') ps.push(pill('warn', (why === 'garbled' ? 'The text in this file can’t be read.' : 'This is a picture with no text layer.') + offers()));
     else if (why === 'no-items') ps.push(pill('warn', 'No line items were recognised.' + offers()));
   }
-  if (tpl) ps.push(pill('good', 'Known supplier' + (doc.tplWhy.length && doc.tplWhy[0] !== 'saved' ? ', matched on ' + esc(doc.tplWhy.slice(0, 3).join(', ')) : '') + (doc.touched ? ' <button class="link" type="button" data-act="save-tpl">Update saved layout</button>' : '')));
-  else if (doc.pages[0].hasText || doc.zones.length) ps.push(pill('', 'New layout <button class="link" type="button" data-act="save-tpl">Save for next time</button>'));
+  if (tpl) {
+    const w = doc.tplWhy[0] || '';
+    const head = w === 'auto-saved' ? 'New supplier, layout saved automatically' : w === 'auto-updated' ? 'Layout updated with your changes' : 'Known supplier' + (doc.tplWhy.length && w !== 'saved' ? ', matched on ' + esc(doc.tplWhy.slice(0, 3).join(', ')) : '');
+    ps.push(pill('good', head + (doc.userEdit ? (S.autoTpl ? ', saving your changes…' : ' <button class="link" type="button" data-act="save-tpl">Update saved layout</button>') : '')));
+  }
+  else if (doc.pages[0].hasText || doc.zones.length) {
+    const named = doc.result.fields.supplier && String(doc.result.fields.supplier.value).trim();
+    ps.push(pill('', S.autoTpl && !doc.sample && !named ? 'New layout. Type the supplier name under Details and it is saved automatically' : 'New layout <button class="link" type="button" data-act="save-tpl">Save for next time</button>'));
+  }
   if (r.check) ps.push(r.check.ok
     ? pill('good', r.check.n + ' line' + (r.check.n === 1 ? '' : 's') + ' add up to the ' + esc(/total/i.test(r.check.against) ? r.check.against.replace(/\s*\$$/, '').toLowerCase() : r.check.against) + ', ' + money(r.check.sum))
     : pill('warn', 'Lines add up to ' + money(r.check.sum) + (r.check.expected != null ? ', but the ' + esc(String(r.check.against).toLowerCase()) + ' is ' + money(r.check.expected) : '')));
+  if (doc.orient && doc.orient.deg) {
+    const by = { photo: 'using the photo’s orientation', 'photo+ink': 'using the photo’s orientation and the text', ink: 'the text was ' + (doc.orient.deg === 180 ? 'upside down' : 'sideways'), text: 'the PDF text was ' + (doc.orient.deg === 180 ? 'upside down' : 'sideways'), gemini: 'Gemini saw it was ' + (doc.orient.deg === 180 ? 'upside down' : 'sideways'), hand: 'turned by hand' }[doc.orient.by] || '';
+    ps.push(pill('good', (doc.orient.by === 'hand' ? 'Page turned by hand' : 'Turned upright: ' + esc(by)) + (doc.orient.pages > 1 ? ' (' + doc.orient.pages + ' pages)' : '') + (doc.sample ? '' : ' <button class="link" type="button" data-act="turn">Turn again</button>')));
+  }
+  if (doc.file && Files.can && Files.dir) {
+    if (doc.saved) ps.push(pill('good', (doc.saved.existed ? 'Already in ' : 'Saved in ') + esc(doc.saved.where)));
+    else if (Files.waiting && Files.auto) ps.push(pill('warn', 'Allow access to ' + esc(Files.dir.name) + ' to save this invoice there <button class="link" type="button" data-act="folder-allow">Allow</button>'));
+    else if (doc.fileErr) ps.push(pill('bad', esc(doc.fileErr)));
+  }
   if (doc.aiError) ps.push(pill('bad', esc(doc.aiError) + (doc.aiErrSet ? ' <button class="link" type="button" data-act="settings">Open settings</button>' : '')));
-  el.innerHTML = '<div class="who">' + (lt ? '<img src="' + lt + '" alt="Supplier logo">' : '') + '<div class="whoText"><div class="sup">' + (f.supplier ? esc(f.supplier.value) : '<span class="unk">Supplier not found yet</span>') + '</div><div class="meta">' + bits.join(' · ') + '</div></div></div><div class="pills">' + ps.join('') + '</div>';
+  const cl = contactLinks(fieldContacts(f));
+  el.innerHTML = '<div class="who">' + (lt ? '<img src="' + lt + '" alt="Supplier logo">' : '') + '<div class="whoText"><div class="sup">' + (f.supplier ? esc(f.supplier.value) : '<span class="unk">Supplier not found yet</span>') + '</div><div class="meta">' + bits.join(' · ') + '</div>' +
+    (cl.length ? '<div class="contacts" aria-label="Supplier contact details">' + cl.join('') + '</div>' : '') + '</div></div><div class="pills">' + ps.join('') + '</div>';
 }
 function renderItems() {
   const doc = cur(), el = $('#pane-items');
@@ -2091,7 +2401,7 @@ function renderItems() {
   h += '</div>';
   el.innerHTML = h;
 }
-const SRC = { zone: 'from its box', auto: 'found in the text', typed: 'typed', ai: 'read by Claude', layout: 'from the saved layout' };
+const SRC = { zone: 'from its box', auto: 'found in the text', typed: 'typed', ai: 'read by Claude', gemini: 'read by Gemini', layout: 'from the saved layout' };
 function renderDetails() {
   const doc = cur(), el = $('#pane-details');
   if (!doc) { el.innerHTML = '<p class="empty">Open an invoice to see its details here.</p>'; return; }
@@ -2100,14 +2410,40 @@ function renderDetails() {
   let h = '<div class="fields">' + fld('supplier', 'Supplier') + fld('abn', 'ABN', fmtAbn) + fld('invoice_no', 'Invoice no.') + fld('date', 'Invoice date') + fld('due_date', 'Due date') + fld('total', 'Total', v => typeof v === 'number' ? v.toFixed(2) : v);
   r.custom.forEach(c => { h += '<div class="fld"><label>' + esc(c.label) + '<em>from its box</em></label><input type="text" value="' + esc(c.value) + '" readonly aria-label="' + esc(c.label) + '"></div>'; });
   h += '</div>';
+  const cl = contactLinks(fieldContacts(f));
+  h += '<h3 class="sec">Supplier contact</h3><div class="fields">' + fld('phone', 'Phone') + fld('email', 'Email') + fld('website', 'Website') + '</div>' +
+    (cl.length ? '<div class="contacts big">' + cl.join('') + '</div><p class="note">Tap a number to call it or an address to write an email. Separate several with commas.</p>' : '<p class="note">No phone number or email found. Type them above, separated by commas, and they are kept with the supplier.</p>');
   if (r.totals.length) h += '<h3 class="sec">Printed under the table</h3><div class="sumlines">' + r.totals.map(t => '<div><span>' + esc(t.label) + '</span><span>' + money(t.value) + '</span></div>').join('') + '</div>';
   const lt = logoThumb(doc);
   h += '<h3 class="sec">Logo</h3>' + (lt ? '<div class="tpl"><img src="' + lt + '" alt="Supplier logo" style="width:auto;max-width:200px;height:56px"><div class="t"><span>Cropped from the Logo box. It is saved with the supplier layout and used to recognise their next invoice, including scans.</span></div></div>' : '<p class="note">No logo marked. Draw a box around the logo and choose Logo to use it for recognising this supplier.</p>');
   h += '<p class="note">Values typed here override what was read and go into the CSV.</p>';
+  h += '<h3 class="sec">Invoice file</h3>' + fileSection(doc);
   el.innerHTML = h;
 }
+function fileSection(doc) {
+  if (!doc.file) return '<p class="note">The sample invoice has no file of its own. Open one of your invoices to save, copy or move it.</p>';
+  const nm = invoiceFileName(doc);
+  let h = '<div class="filebox"><div class="fname" title="' + esc(doc.name) + '">' + esc(doc.name) + '</div>';
+  if (!Files.can) {
+    h += '<p class="note">This browser can’t save into a folder you choose: Safari, iPhone and iPad, Firefox and Android don’t allow web pages to. Download a copy named after the supplier instead, then move it with the Files app.</p>' +
+      '<div class="row"><button class="btn small" type="button" data-act="file-dl">Download a copy</button><span class="note">' + esc(invoiceFileName(doc, true).name) + '</span></div></div>';
+    return h;
+  }
+  if (doc.saved) h += '<p class="saved">' + pill('good', (doc.saved.existed ? 'Already in ' : 'Saved in ') + esc(doc.saved.where)) + '</p>';
+  else if (doc.fileErr) h += '<p class="saved">' + pill('bad', esc(doc.fileErr)) + '</p>';
+  else if (!Files.dir) h += '<p class="note">No invoice folder chosen. <button class="link" type="button" data-act="folder-pick">Choose a folder</button> and every invoice you open is saved into it as ' + esc((Files.sub && nm.folder ? nm.folder + '/' : '') + nm.name) + '.</p>';
+  else if (Files.waiting || Files.perm !== 'granted') h += '<p class="note">' + esc(Files.dir.name) + ' needs your permission again before files can be saved. <button class="link" type="button" data-act="folder-allow">Allow</button></p>';
+  else if (!Files.auto) h += '<p class="note">Will be saved as ' + esc((nm.folder ? nm.folder + '/' : '') + nm.name) + '.</p>';
+  else h += '<p class="note">Saving into ' + esc(Files.dir.name) + '…</p>';
+  if (doc.copies && doc.copies.length) h += '<p class="note">Copied to ' + doc.copies.map(esc).join(', ') + '.</p>';
+  h += '<div class="row">' + (Files.dir && !doc.saved ? '<button class="btn small primary" type="button" data-act="file-save">Save to ' + esc(Files.dir.name) + '</button>' : '') +
+    '<button class="btn small" type="button" data-act="file-copy">Copy to folder…</button><button class="btn small" type="button" data-act="file-move">Move to folder…</button>' +
+    (doc.leftOriginal ? '<button class="btn small danger" type="button" data-act="file-rm-orig">Remove the original</button>' : '') + '</div>';
+  h += '<p class="note">' + (doc.handle ? 'Opened with the Open button, so Move can delete the original once you allow it.' : 'Opened from the file box or by pasting, so Move copies it and leaves the original where it is. Use the Open button in Chrome or Edge to let Move delete the original.') + '</p></div>';
+  return h;
+}
 function csvDocs() { const d = cur(); return S.opts.scope === 'all' ? S.docs : (d ? [d] : []); }
-function csvNow() { return Engine.buildCSV(csvDocs().map(d => ({ result: d.result })), { meta: S.opts.meta, clean: S.opts.clean, dateStyle: S.opts.dateStyle }); }
+function csvNow() { return Engine.buildCSV(csvDocs().map(d => ({ result: d.result })), { meta: S.opts.meta, clean: S.opts.clean, dateStyle: S.opts.dateStyle, contacts: S.opts.contacts }); }
 function renderCsv() {
   const doc = cur(), el = $('#pane-csv');
   if (!doc) { el.innerHTML = '<p class="empty">Open an invoice to build its CSV.</p>'; return; }
@@ -2118,6 +2454,7 @@ function renderCsv() {
     (S.docs.length > 1 ? '<label for="o-scope">Rows from <select id="o-scope"><option value="this"' + (o.scope === 'this' ? ' selected' : '') + '>this invoice</option><option value="all"' + (o.scope === 'all' ? ' selected' : '') + '>all ' + S.docs.length + ' open invoices</option></select></label>' : '') +
     '<label for="o-meta"><input type="checkbox" id="o-meta"' + (o.meta ? ' checked' : '') + '>Put supplier, invoice no. and date on every row</label>' +
     '<label for="o-clean"><input type="checkbox" id="o-clean"' + (o.clean ? ' checked' : '') + '>Plain numbers, without $ or thousands commas</label>' +
+    '<label for="o-contacts"><input type="checkbox" id="o-contacts"' + (o.contacts ? ' checked' : '') + '>Add the supplier’s phone and email, as the last two columns</label>' +
     '<label for="o-date">Dates as <select id="o-date"><option value="iso"' + (o.dateStyle === 'iso' ? ' selected' : '') + '>2026-11-04</option><option value="dmy"' + (o.dateStyle === 'dmy' ? ' selected' : '') + '>04/11/2026</option><option value="mdy"' + (o.dateStyle === 'mdy' ? ' selected' : '') + '>11/04/2026</option></select></label>' +
     '</div><div class="row"><button class="btn primary" type="button" data-act="copy-csv">Copy CSV</button>' + (canDl ? '<button class="btn" type="button" data-act="dl-csv">Download .csv</button>' : '') +
     '<span class="note">' + csv.rows + ' row' + (csv.rows === 1 ? '' : 's') + ', ' + csv.head.length + ' columns</span></div>' +
@@ -2131,12 +2468,14 @@ function renderSuppliers() {
     const f = doc.result.fields, name = f.supplier ? String(f.supplier.value) : 'this supplier';
     h += '<div class="row"><button class="btn primary" type="button" data-act="save-tpl">' + (doc.tplId ? 'Update layout for ' : 'Save layout for ') + esc(name.length > 28 ? name.slice(0, 27) + '…' : name) + '</button><button class="btn" type="button" data-act="redetect">Reset boxes</button></div>';
   }
-  h += '<p class="note">A saved layout remembers what each box sits next to, plus your column choices. The next invoice with the same ABN, name or logo is scanned and its boxes are placed to fit: the table box follows however many lines there are.</p>';
+  h += '<label class="chk" for="auto-tpl"><input type="checkbox" id="auto-tpl"' + (S.autoTpl ? ' checked' : '') + '>Save the layout of a new supplier automatically, and keep it updated when you move its boxes</label>';
+  h += '<p class="note">A saved layout remembers what each box sits next to, plus your column choices and the supplier’s phone and email. The next invoice with the same ABN, name or logo is scanned and its boxes are placed to fit: the table box follows however many lines there are.</p>';
   if (!S.templates.length) h += '<p class="empty">No supplier layouts saved yet.</p>';
   for (const t of S.templates) {
     const on = doc && doc.tplId === t.id;
     h += '<div class="tpl' + (on ? ' on' : '') + '">' + (t.logo && t.logo.thumb ? '<img src="' + esc(t.logo.thumb) + '" alt="">' : '<span class="noimg">NO LOGO</span>') +
-      '<div class="t"><b>' + esc(t.name) + '</b><span>' + (t.abn ? 'ABN ' + esc(fmtAbn(t.abn)) + ' · ' : '') + t.zones.length + ' box' + (t.zones.length === 1 ? '' : 'es') + (on ? ' · in use' : '') + '</span></div>' +
+      '<div class="t"><b>' + esc(t.name) + '</b><span>' + (t.abn ? 'ABN ' + esc(fmtAbn(t.abn)) + ' · ' : '') + t.zones.length + ' box' + (t.zones.length === 1 ? '' : 'es') + (t.auto ? ' · saved automatically' : '') + (on ? ' · in use' : '') + '</span>' +
+      (contactLinks(t, true).length ? '<div class="contacts">' + contactLinks(t, true).join('') + '</div>' : '') + '</div>' +
       (doc && !on ? '<button class="btn small" type="button" data-apply="' + esc(t.id) + '">Apply</button>' : '') +
       '<button class="iconbtn" type="button" data-del="' + esc(t.id) + '" aria-label="Delete the layout for ' + esc(t.name) + '">' + IC.bin.replace('<svg', '<svg width="18" height="18"') + '</button></div>';
   }
@@ -2157,6 +2496,7 @@ function renderDocSel() {
 function renderAll() { renderDocSel(); renderStatus(); renderTabs(); renderTab(); layoutZones(); renderDock(); }
 
 $('#panel').addEventListener('click', async e => {
+  if (e.target.closest('a[href]')) return;                                       // tel:, mailto: and web links open on their own
   const b = e.target.closest('button');
   if (b && b.dataset.libSort) {
     const view = S.lib.view, k = b.dataset.libSort, cur = S.lib.order[view] || ['', 'desc'];
@@ -2198,12 +2538,29 @@ $('#panel').addEventListener('click', async e => {
     case 'gem': geminiScan(doc); break;
     case 'settings': openSettings(); break;
     case 'ai-off': doc.mode = 'text'; doc.aiStale = false; run(doc); renderAll(); break;
+    case 'turn': turnByHand(doc); break;
+    case 'file-dl': downloadOriginal(doc); break;
+    case 'file-copy': fileTo(doc, false); break;
+    case 'file-move': fileTo(doc, true); break;
+    case 'file-save': if (await Files.ready(true)) { Files.waiting = false; doc.saved = null; doc.fileErr = ''; fileQ.add(doc); await flushFileSave(true); toast(doc.saved ? 'Saved in ' + doc.saved.where + '.' : doc.fileErr || 'Not saved yet: its scan is still running.'); } else toast('Access to the folder was not allowed.', 'bad'); break;
+    case 'file-rm-orig': { const r = await removeOriginal(doc, true); toast(r === 'removed' ? 'The original was deleted, so the invoice now lives only in ' + (doc.saved ? doc.saved.where : 'its new folder') + '.' : 'The original could not be deleted, so it stays where it was.', r === 'removed' ? '' : 'bad'); renderAll(); break; }
+    case 'folder-pick': await pickFolder(); break;
+    case 'folder-allow': if (await Files.ready(true)) { Files.waiting = false; S.docs.forEach(queueFileSave); await flushFileSave(true); } else toast('Access to the folder was not allowed.', 'bad'); renderAll(); break;
   }
 });
+async function pickFolder() {
+  if (!Files.can) return;
+  try { await Files.pick(); } catch (e) { if (!e || e.name !== 'AbortError') toast('That folder could not be opened.', 'bad'); return; }
+  Files.waiting = false; S.docs.forEach(d => { d.fileErr = ''; queueFileSave(d); });
+  toast('Invoices will be saved into ' + Files.dir.name + '.');
+  await flushFileSave(true);
+  if (!$('#settings').hidden) renderSettings(''); renderAll();
+}
 $('#panel').addEventListener('change', e => {
   const doc = cur(), t = e.target;
   if (t.id === 'libFile') { const f = t.files && t.files[0]; t.value = ''; if (f) libRestore(f); return; }
   if (t.id === 'lib-q') return;
+  if (t.id === 'auto-tpl') { S.autoTpl = t.checked; try { localStorage.setItem(AUTO_TPL_KEY, t.checked ? '1' : '0'); } catch (e2) {} if (S.autoTpl) S.docs.forEach(queueAutoTpl); renderStatus(); return; }
   if (!doc) return;
   if (t.dataset.map != null) {
     const j = +t.dataset.map, c = doc.result.columns[j], v = t.value; if (!c) return;
@@ -2212,7 +2569,7 @@ $('#panel').addEventListener('change', e => {
     run(doc); renderAll(); return;
   }
   if (t.dataset.field) { const k = t.dataset.field; let v = t.value.trim(); if (k === 'abn') v = v.replace(/\D/g, ''); if (k === 'date' || k === 'due_date') { const d = Engine.parseDate(v, S.opts.mdy); if (d) v = d.iso; } doc.manual[k] = v; run(doc); renderAll(); return; }
-  if (t.id === 'o-meta') S.opts.meta = t.checked; else if (t.id === 'o-clean') S.opts.clean = t.checked; else if (t.id === 'o-date') S.opts.dateStyle = t.value; else if (t.id === 'o-scope') S.opts.scope = t.value; else return;
+  if (t.id === 'o-meta') S.opts.meta = t.checked; else if (t.id === 'o-clean') S.opts.clean = t.checked; else if (t.id === 'o-contacts') S.opts.contacts = t.checked; else if (t.id === 'o-date') S.opts.dateStyle = t.value; else if (t.id === 'o-scope') S.opts.scope = t.value; else return;
   renderCsv();
 });
 $('#panel').addEventListener('focusout', e => {
@@ -2320,6 +2677,144 @@ async function copyVisibleTable() {
 }
 function downloadCsv() { return giveFile(csvName(), String.fromCharCode(0xFEFF) + csvNow().text, 'CSV'); }
 
+/* ================= invoice folder: a copy of every opened invoice file, saved into a folder the user picks ================= */
+// Chrome and Edge on a computer only: Safari, iPhone and iPad, Firefox and Android cannot write into a chosen folder
+const Files = {
+  can: typeof window.showDirectoryPicker === 'function' && !!window.isSecureContext,
+  canOpen: typeof window.showOpenFilePicker === 'function' && !!window.isSecureContext,
+  KEY: 'invoice-scraper.folder.v1', dir: null, perm: '', auto: true, sub: true, waiting: false,
+  async load() {
+    try { const o = JSON.parse(localStorage.getItem(this.KEY) || 'null'); if (o && typeof o === 'object') { this.auto = o.auto !== false; this.sub = o.sub !== false; } } catch (e) {}
+    if (!this.can) return;
+    try { const d = await idbGet('folder'); if (d && d.kind === 'directory') { this.dir = d; this.perm = await d.queryPermission({ mode: 'readwrite' }); } } catch (e) { this.dir = null; }
+  },
+  save() { try { localStorage.setItem(this.KEY, JSON.stringify({ auto: this.auto, sub: this.sub })); } catch (e) {} },
+  async pick() {
+    const d = await window.showDirectoryPicker({ id: 'invoice-folder', mode: 'readwrite', startIn: this.dir || 'documents' });
+    this.dir = d; this.perm = 'granted';
+    try { await idbSet('folder', d); } catch (e) {}
+    return d;
+  },
+  // asking needs a tap, so call with gesture=true only from a click
+  async ready(gesture) {
+    if (!this.dir) return false;
+    try {
+      let p = await this.dir.queryPermission({ mode: 'readwrite' });
+      if (p !== 'granted' && gesture) p = await this.dir.requestPermission({ mode: 'readwrite' });
+      this.perm = p;
+    } catch (e) { this.perm = 'denied'; }
+    return this.perm === 'granted';
+  },
+  async forget() { this.dir = null; this.perm = ''; try { await idbSet('folder', undefined); } catch (e) {} },
+};
+function idbOpen() {
+  return new Promise((res, rej) => { const r = indexedDB.open('invoice-scraper', 1); r.onupgradeneeded = () => r.result.createObjectStore('handles'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+}
+async function idbGet(k) {
+  const db = await idbOpen();
+  return new Promise((res, rej) => { const q = db.transaction('handles').objectStore('handles').get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+}
+async function idbSet(k, v) {
+  const db = await idbOpen();
+  return new Promise((res, rej) => { const tx = db.transaction('handles', 'readwrite'), st = tx.objectStore('handles'); if (v === undefined) st.delete(k); else st.put(v, k); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); });
+}
+const safeName = s => String(s == null ? '' : s).replace(/[\u0000-\u001f\\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').replace(/^[\s.]+|[\s.]+$/g, '').slice(0, 80);
+// Supplier/2026-11-04 SI180345.pdf, or "Supplier - 2026-11-04 - SI180345.pdf" without supplier folders
+function invoiceFileName(doc, flat) {
+  const f = (doc.result && doc.result.fields) || {}, m = /^(.*?)(?:\.([a-z0-9]{2,5}))?$/i.exec(doc.name || 'invoice');
+  const ext = (m[2] || (doc.kind === 'pdf' ? 'pdf' : 'jpg')).toLowerCase(), orig = safeName(m[1]) || 'invoice';
+  const sup = safeName(f.supplier && f.supplier.value), date = f.date && /^\d{4}-\d{2}-\d{2}$/.test(f.date.value) ? f.date.value : '', no = safeName(f.invoice_no && f.invoice_no.value);
+  const tail = [date, no].filter(Boolean).join(' ');
+  if (!flat && Files.sub && sup) return { folder: sup, name: (tail || orig) + '.' + ext };
+  return { folder: '', name: ([sup, date, no].filter(Boolean).join(' - ') || orig) + '.' + ext };
+}
+// write without overwriting: the same file already there is left alone, a different one with that name gets " (2)"
+async function writeInto(dir, folder, name, file) {
+  const d = folder ? await dir.getDirectoryHandle(folder, { create: true }) : dir;
+  let n = name;
+  for (let i = 2; i < 60; i++) {
+    let h = null; try { h = await d.getFileHandle(n); } catch (e) {}
+    if (!h) break;
+    try { const ex = await h.getFile(); if (ex.size === file.size) return { dir: d, name: n, handle: h, existed: true }; } catch (e) {}
+    n = name.replace(/(\.[^.]+)?$/, ' (' + i + ')$1');
+  }
+  const h = await d.getFileHandle(n, { create: true }), w = await h.createWritable();
+  try { await w.write(file); await w.close(); } catch (e) { try { await w.abort(); } catch (e2) {} throw e; }
+  return { dir: d, name: n, handle: h, existed: false };
+}
+const fileQ = new Set(); let fileT = 0;
+function queueFileSave(doc) {
+  if (!Files.can || !Files.dir || !Files.auto || !doc || !doc.file || doc.saved || doc.fileBusy) return;
+  fileQ.add(doc); clearTimeout(fileT); fileT = setTimeout(flushFileSave, 1500);
+}
+async function flushFileSave(gesture) {
+  clearTimeout(fileT);
+  const docs = [...fileQ].filter(d => S.docs.includes(d) && d.file && !d.saved && !d.fileBusy);
+  if (!docs.length) { fileQ.clear(); return; }
+  const later = docs.filter(d => d.gemPending || d.aiBusy);                 // name the file once its scan has read the supplier
+  if (later.length === docs.length) return;
+  if (!(await Files.ready(gesture))) { Files.waiting = true; renderStatus(); return; }
+  Files.waiting = false;
+  for (const d of docs) {
+    if (later.includes(d)) continue;
+    fileQ.delete(d); d.fileBusy = true;
+    try {
+      const nm = invoiceFileName(d), out = await writeInto(Files.dir, nm.folder, nm.name, d.file);
+      d.saved = { dir: out.dir, handle: out.handle, name: out.name, where: [Files.dir.name, nm.folder, out.name].filter(Boolean).join('/'), existed: out.existed, mine: !out.existed };
+    } catch (e) { d.fileErr = 'Could not save into ' + Files.dir.name + (e && e.name === 'NotAllowedError' ? ': access was refused.' : '.'); }
+    d.fileBusy = false;
+  }
+  renderStatus(); if (S.tab === 'details') renderDetails();
+}
+function downloadOriginal(doc) {
+  if (!doc || !doc.file) { toast('The sample invoice has no file to save.'); return; }
+  const nm = invoiceFileName(doc, true);
+  try { const u = URL.createObjectURL(doc.file), a = document.createElement('a'); a.href = u; a.download = nm.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 4000); toast('Downloading ' + nm.name + '. Your browser puts it in its Downloads folder.'); }
+  catch (e) { toast('The file could not be downloaded here.', 'bad'); }
+}
+const sameEntry = async (a, b) => { try { return !!(a && b && await a.isSameEntry(b)); } catch (e) { return false; } };
+// copy or move the invoice file into a folder picked now. A move deletes only what this page may delete:
+// the copy it saved into the invoice folder, and the original when it was opened with the file picker or dragged in from Chrome or Edge
+async function fileTo(doc, move) {
+  if (!doc || !doc.file) { toast('The sample invoice has no file to copy.'); return; }
+  if (!Files.can) { downloadOriginal(doc); return; }
+  let target;
+  try { target = await window.showDirectoryPicker({ id: 'invoice-target', mode: 'readwrite', startIn: Files.dir || 'documents' }); }
+  catch (e) { if (!e || e.name !== 'AbortError') toast('That folder could not be opened.', 'bad'); return; }
+  const nm = invoiceFileName(doc, true);
+  let out;
+  try { out = await writeInto(target, '', nm.name, doc.file); }
+  catch (e) { toast('Could not write into ' + target.name + '. Pick a folder you can save into.', 'bad'); return; }
+  const where = target.name + '/' + out.name;
+  if (!move) { doc.copies = (doc.copies || []).concat(where); toast((out.existed ? 'Already in ' : 'Copied to ') + where + '.'); renderAll(); return; }
+  const gone = [];
+  if (doc.saved && doc.saved.mine && doc.saved.handle && !(await sameEntry(doc.saved.handle, out.handle))) {
+    try { await doc.saved.dir.removeEntry(doc.saved.name); gone.push('the copy in ' + doc.saved.where.replace(/\/[^\/]*$/, '')); } catch (e) {}
+  }
+  let original = 'kept';
+  if (doc.handle && !(await sameEntry(doc.handle, out.handle))) original = await removeOriginal(doc, false);
+  doc.saved = { dir: target, handle: out.handle, name: out.name, where, mine: !out.existed };
+  doc.leftOriginal = original === 'ask';
+  const also = gone.length ? ' Removed ' + gone.join(' and ') + '.' : '';
+  const why = ' because the page can only delete files opened with the Open button in Chrome or Edge.';
+  if (original === 'removed') toast('Moved to ' + where + '. The original was deleted.' + also);
+  else if (original === 'ask') toast('Copied to ' + where + '.' + also + ' Tap “Remove the original” under Details to finish the move.');
+  else if (gone.length) toast('Moved the saved copy to ' + where + '. The file you opened is still where it was,' + why);
+  else toast('Copied to ' + where + ', not moved: the original stays where it was,' + why);
+  renderAll();
+}
+// 'removed', 'ask' (needs a tap to allow it), or 'kept'
+async function removeOriginal(doc, gesture) {
+  const h = doc.handle;
+  if (!h || typeof h.remove !== 'function') return 'kept';
+  try {
+    let p = await h.queryPermission({ mode: 'readwrite' });
+    if (p !== 'granted') { try { p = await h.requestPermission({ mode: 'readwrite' }); } catch (e) { if (!gesture) return 'ask'; } }
+    if (p !== 'granted') return gesture ? 'kept' : 'ask';
+    await h.remove(); doc.handle = null; doc.leftOriginal = false; return 'removed';
+  } catch (e) { return 'kept'; }
+}
+
 /* ================= inventory library: every invoice's items, kept in this browser's local storage ================= */
 const Lib = {
   KEY: 'invoice-scraper.inventory.v1', store: Library.empty(), state: 'ok', _agg: null,
@@ -2344,7 +2839,7 @@ const Lib = {
     if (!doc || !doc.result || !doc.lib || doc.gemPending || doc.aiBusy) return false;   // wait for a scan that is still running
     const rec = Library.record(doc.result, { file: doc.name, src: doc.mode === 'ai' ? (doc.aiBy || 'claude') : 'text' });
     if (!rec) { if (doc.libState === 'empty') return false; doc.libState = 'empty'; return 'empty'; }
-    const sig = JSON.stringify([rec.supplier, rec.abn, rec.invoice_no, rec.date, rec.total, rec.src, rec.lines]);
+    const sig = JSON.stringify([rec.supplier, rec.abn, rec.invoice_no, rec.date, rec.total, rec.src, rec.phone, rec.email, rec.website, rec.lines]);
     if (doc.libKey === rec.key && doc.libSig === sig && this.store.invoices[rec.key]) { if (doc.libState === 'saved') return false; doc.libState = 'saved'; return 'updated'; }
     const now = new Date().toISOString(), prev = doc.libKey; let existed = false;
     this.mutate(st => { if (prev && prev !== rec.key) delete st.invoices[prev]; const was = st.invoices[rec.key]; existed = !!was; rec.added = was && was.added ? was.added : now; rec.updated = now; st.invoices[rec.key] = rec; });
@@ -2420,6 +2915,7 @@ function libInvRows(i, n, nCols) {
     '<td>' + esc(niceDate(i.date || String(i.added).slice(0, 10))) + '</td>' +
     '<td class="clip" title="' + esc(i.supplier || '') + '">' + esc(i.supplier || 'Unknown supplier') + '</td><td>' + esc(i.invoice_no || '') + '</td>' +
     '<td class="num">' + i.lines.length + '</td><td class="num">' + (i.total != null ? money(i.total) : '') + '</td><td>' + (i.src === 'gemini' ? 'Gemini' : i.src === 'claude' ? 'Claude' : 'Text') + '</td>' +
+    '<td class="clip">' + Engine.splitList(i.phone).map(telLink).join(' ') + '</td><td class="clip">' + Engine.splitList(i.email).map(mailLink).join(' ') + '</td>' +
     '<td class="clip" title="' + esc(i.file || '') + '">' + esc(i.file || '') + '</td>' +
     '<td class="act"><button class="iconbtn" type="button" data-rm-inv="' + esc(i.key) + '" aria-label="Remove ' + esc(i.invoice_no || i.file) + ' from the library" title="Remove from the library">' + IC.bin.replace('<svg', '<svg width="18" height="18"') + '</button></td></tr>';
   if (open) h += '<tr class="hist"><td colspan="' + nCols + '"><div class="sheet-hist"><p class="note">Items purchased on this invoice. Ignore one to leave it out when new invoices are scanned.</p><table class="libsheet nested"><thead><tr><th class="act"></th><th>Code</th><th>Description</th><th class="num">Qty</th><th>UOM</th><th class="num">Unit price</th><th class="num">Amount</th></tr></thead><tbody>' +
@@ -2472,9 +2968,9 @@ function renderLibrary() {
   } else {
     const cols = [
       { key: '', label: '#', cls: 'rn' }, { key: 'date', label: 'Date', dir: 'desc' }, { key: 'supplier', label: 'Supplier' }, { key: 'invoice_no', label: 'Invoice' },
-      { key: 'nLines', label: 'Lines', cls: 'num', dir: 'desc' }, { key: 'total', label: 'Total', cls: 'num', dir: 'desc' }, { key: 'src', label: 'Read by' }, { key: 'file', label: 'File' }, { key: '', label: '', cls: 'act' }
+      { key: 'nLines', label: 'Lines', cls: 'num', dir: 'desc' }, { key: 'total', label: 'Total', cls: 'num', dir: 'desc' }, { key: 'src', label: 'Read by' }, { key: 'phone', label: 'Phone' }, { key: 'email', label: 'Email' }, { key: 'file', label: 'File' }, { key: '', label: '', cls: 'act' }
     ];
-    const invs = a.invoices.filter(i => has(i.supplier + ' ' + i.invoice_no + ' ' + i.file));
+    const invs = a.invoices.filter(i => has(i.supplier + ' ' + i.invoice_no + ' ' + i.file + ' ' + (i.phone || '') + ' ' + (i.email || '')));
     libOrder(invs, 'invoices');
     h = invs.length ? '<table class="libsheet">' + libHead(cols, 'invoices') + '<tbody>' + invs.slice(0, L.limit).map((i, n) => libInvRows(i, n + 1, cols.length)).join('') + '</tbody></table>' + more(invs.length) : none;
   }
@@ -2548,7 +3044,9 @@ function cleanTpl(t) {
   const rect = r => ({ x: num(r && r.x), y: num(r && r.y), w: num(r && r.w), h: num(r && r.h) });
   const off = v => (typeof v === 'number' && isFinite(v) ? clamp(v, -2, 2) : 0);
   const anc = a => { if (!a || typeof a !== 'object' || !Array.isArray(a.t)) return null; const tk = a.t.slice(0, 8).map(x => String(x).slice(0, 40)).filter(Boolean); return tk.length ? { t: tk, dx: off(a.dx), dy: off(a.dy), ax: off(a.ax), ay: off(a.ay) } : null; };
+  const line = (v, n) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, n) : '');
   const out = { id: t.id, name: String(t.name).slice(0, 120), abn: String(t.abn || '').replace(/\D/g, '').slice(0, 11), headerSig: String(t.headerSig || '').slice(0, 400), updated: String(t.updated || '').slice(0, 40), logo: null,
+    phone: line(t.phone, 120), email: line(t.email, 200), website: line(t.website, 200), auto: !!t.auto,
     zones: t.zones.slice(0, 60).filter(z => z && ZT[z.type]).map(z => { const map = {}; if (z.map && typeof z.map === 'object') for (const [k, v] of Object.entries(z.map)) if (/^\d{1,2}$/.test(k) && (v === '' || v === '*' || Engine.FIELD_BY_KEY[v])) map[k] = v; return { type: z.type, page: clamp(Math.floor(+z.page || 0), 0, 39), allPages: !!z.allPages, label: String(z.label || '').slice(0, 40), map, rect: rect(z.rect), dyn: ['auto', 'table', 'anchor', 'image', 'fixed'].includes(z.dyn) ? z.dyn : 'auto', hdr: z.hdr !== false, anchor: z.anchor && typeof z.anchor === 'object' ? { inner: anc(z.anchor.inner), outer: anc(z.anchor.outer) } : null }; }) };
   if (t.logo && typeof t.logo === 'object') out.logo = { rect: rect(t.logo.rect), hash: /^[01]{256}$/.test(t.logo.hash || '') ? t.logo.hash : '', thumb: typeof t.logo.thumb === 'string' && /^data:image\/(jpeg|png);base64,[A-Za-z0-9+\/=]+$/.test(t.logo.thumb) && t.logo.thumb.length < 60000 ? t.logo.thumb : '' };
   return out;
@@ -2573,26 +3071,65 @@ const Store = {
   },
   async remove(id) { S.templates = S.templates.filter(t => t.id !== id); this.saveLocal(); if (this.db) { try { await this.db.doc('layouts/' + id).delete(); } catch (e) {} } },
 };
-async function saveTemplate() {
-  const doc = cur(); if (!doc) return;
+// how: 'manual' (the Save button) or 'auto'; returns null when there was nothing to save
+async function saveTemplateFor(doc, how) {
   const f = doc.result.fields, p0 = doc.pages[0];
-  const name = f.supplier ? String(f.supplier.value) : '';
-  if (!name) { S.tab = 'details'; renderAll(); toast('Type the supplier name under Details first, so the layout has a name.'); const i = $('#f-supplier'); if (i) i.focus(); return; }
+  const name = f.supplier ? String(f.supplier.value).trim() : '';
+  if (!name) return null;
   const abn = f.abn ? String(f.abn.value).replace(/\D/g, '') : '';
   const old = S.templates.find(t => t.id === doc.tplId) || S.templates.find(t => (abn && t.abn === abn) || Engine.norm(t.name) === Engine.norm(name));
   const id = old ? old.id : 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const zones = doc.zones.map(z => Object.assign({ type: z.type, page: z.page, allPages: !!z.allPages, label: z.label || '', map: z.map || {}, rect: normRect(z.rect, doc.pages[z.page]) }, Engine.zoneSpec(doc.pages[z.page], z)));
   const lz = doc.zones.find(z => z.type === 'logo' && z.page === 0);
-  const logo = lz && p0.canvas ? { rect: normRect(lz.rect, p0), hash: aHash(p0.canvas, lz.rect, p0) || '', thumb: cropURL(p0.canvas, lz.rect, p0, 200) } : null;
-  const t = cleanTpl({ id, name, abn, headerSig: doc.fp ? doc.fp.headerSig : '', zones, logo, updated: new Date().toISOString() });
+  const logo = lz && p0.canvas ? { rect: normRect(lz.rect, p0), hash: aHash(p0.canvas, lz.rect, p0) || '', thumb: cropURL(p0.canvas, lz.rect, p0, 200) } : (old && old.logo) || null;
+  const c = fieldContacts(f);
+  const t = cleanTpl({ id, name, abn, headerSig: doc.fp ? doc.fp.headerSig : '', zones, logo, phone: c.phone || (old && old.phone) || '', email: c.email || (old && old.email) || '', website: c.website || (old && old.website) || '',
+    auto: how === 'auto' && (!old || old.auto), updated: new Date().toISOString() });
   const r = await Store.save(t);
-  doc.tplId = id; doc.tplWhy = ['saved']; doc.touched = false;
+  doc.tplId = id; doc.touched = false; doc.userEdit = false;
+  doc.tplWhy = how === 'auto' ? [old ? 'auto-updated' : 'auto-saved'] : ['saved'];
+  if (!old) recheckDocs();
+  return { r, name, isNew: !old };
+}
+async function saveTemplate() {
+  const doc = cur(); if (!doc) return;
+  const out = await saveTemplateFor(doc, 'manual');
+  if (!out) { S.tab = 'details'; renderAll(); toast('Type the supplier name under Details first, so the layout has a name.'); const i = $('#f-supplier'); if (i) i.focus(); return; }
+  const r = out.r, name = out.name;
   toast(r.remote ? 'Layout saved for ' + name + '.' : r.local ? 'Layout saved for ' + name + ', in this browser.' : 'Layout kept for ' + name + ' until this page closes. Storage is blocked here.');
   renderAll();
 }
+// new suppliers get a layout as soon as they have a name and a table; changes made by hand update it
+const AUTO_TPL_KEY = 'invoice-scraper.autolayout.v1';
+async function maybeAutoTpl(doc) {
+  if (!S.autoTpl || !doc || doc.sample || !doc.result || doc.aiBusy || doc.gemPending || !S.docs.includes(doc)) return null;
+  const f = doc.result.fields; if (!f.supplier || !String(f.supplier.value).trim()) return null;
+  if (!doc.tplId) {
+    if (!doc.zones.length || !(doc.result.rows.length || doc.zones.some(z => z.type === 'table'))) return null;
+    return saveTemplateFor(doc, 'auto');
+  }
+  if (doc.userEdit) return saveTemplateFor(doc, 'auto');
+  const tpl = S.templates.find(t => t.id === doc.tplId); if (!tpl) return null;
+  const c = fieldContacts(f), ch = {};
+  for (const k of ['phone', 'email', 'website']) if (c[k] && f[k].src !== 'layout' && c[k] !== tpl[k]) ch[k] = c[k];
+  if (!Object.keys(ch).length) return null;
+  await Store.save(cleanTpl(Object.assign({}, tpl, ch, { updated: new Date().toISOString() })));
+  return { name: tpl.name, isNew: false, contacts: true };
+}
+const tplQ = new Set(); let tplT = 0;
+function queueAutoTpl(doc) { if (!S.autoTpl || !doc || doc.sample) return; tplQ.add(doc); clearTimeout(tplT); tplT = setTimeout(flushAutoTpl, 1200); }
+async function flushAutoTpl() {
+  if (G) { clearTimeout(tplT); tplT = setTimeout(flushAutoTpl, 800); return; }      // never save half-way through a drag
+  const docs = [...tplQ]; tplQ.clear(); let any = false;
+  for (const d of docs) {
+    const out = await maybeAutoTpl(d); if (!out) continue; any = true;
+    if (out.isNew) toast('New supplier: layout saved for ' + out.name + ', so their next invoice is read the same way.');
+  }
+  if (any) { renderStatus(); if (S.tab === 'suppliers') renderSuppliers(); renderTabs(); }
+}
 
 /* ================= reading scans with Claude ================= */
-const AI_PROMPT = 'You are reading a supplier invoice from images, to turn it into spreadsheet rows.\n\nReply with only one JSON object, no prose, in exactly this shape:\n{"supplier": string or null, "abn": string or null, "invoice_no": string or null, "date": "YYYY-MM-DD" or null, "due_date": "YYYY-MM-DD" or null, "totals": [{"label": string, "value": number}], "columns": [string], "rows": [[string]], "boxes": {"table": [left, top, right, bottom] or null, "supplier": [..] or null, "logo": [..] or null, "invoice_no": [..] or null, "date": [..] or null, "total": [..] or null}}\n\n"supplier" is the business that issued the invoice (read the logo if the name is only there), not the customer it is billed to.\n"totals" are the summary lines printed under the line items (subtotal, discount, GST, total), in order.\n"columns" are the headings of the line-item table exactly as printed, left to right.\n"rows" has one array per line item with one string per column, in the same order as "columns".\n"boxes" says where each thing is on image 1: four numbers from 0 to 1, as fractions of that image, measured from its top-left corner, in the order left, top, right, bottom. "table" covers the heading row and every line-item row but not the totals; "supplier" is the printed name; "invoice_no", "date" and "total" cover just the value. Use null for anything that is not on image 1.\n\nRules: copy every value exactly as printed and never calculate or correct one. Join a wrapped description into one cell. Use "" for a cell the invoice leaves blank. Do not put subtotal or total lines in "rows". Dates are day-first unless the month is written as a word. If something cannot be read, use null or "" and do not guess.\n';
+const AI_PROMPT = 'You are reading a supplier invoice from images, to turn it into spreadsheet rows.\n\nReply with only one JSON object, no prose, in exactly this shape:\n{"supplier": string or null, "abn": string or null, "invoice_no": string or null, "date": "YYYY-MM-DD" or null, "due_date": "YYYY-MM-DD" or null, "phone": [string], "email": [string], "website": string or null, "totals": [{"label": string, "value": number}], "columns": [string], "rows": [[string]], "boxes": {"table": [left, top, right, bottom] or null, "supplier": [..] or null, "logo": [..] or null, "invoice_no": [..] or null, "date": [..] or null, "total": [..] or null}}\n\n"supplier" is the business that issued the invoice (read the logo if the name is only there), not the customer it is billed to.\n"phone", "email" and "website" are the issuer\'s own contact details as printed (not the customer\'s, and not a fax number); use [] or null when none are printed.\n"totals" are the summary lines printed under the line items (subtotal, discount, GST, total), in order.\n"columns" are the headings of the line-item table exactly as printed, left to right.\n"rows" has one array per line item with one string per column, in the same order as "columns".\n"boxes" says where each thing is on image 1: four numbers from 0 to 1, as fractions of that image, measured from its top-left corner, in the order left, top, right, bottom. "table" covers the heading row and every line-item row but not the totals; "supplier" is the printed name; "invoice_no", "date" and "total" cover just the value. Use null for anything that is not on image 1.\n\nRules: copy every value exactly as printed and never calculate or correct one. Join a wrapped description into one cell. Use "" for a cell the invoice leaves blank. Do not put subtotal or total lines in "rows". Dates are day-first unless the month is written as a word. If something cannot be read, use null or "" and do not guess.\n';
 function canvasBlob(canvas, rect, page) {
   return new Promise(res => {
     const sx = canvas.width / page.w, sy = canvas.height / page.h;
@@ -2610,6 +3147,9 @@ function aiResult(o) {
   const set = (k, v) => { if (v !== '' && v != null) res.fields[k] = { value: v, src: 'ai' }; };
   set('supplier', str(o.supplier)); set('abn', str(o.abn).replace(/\D/g, '')); set('invoice_no', str(o.invoice_no));
   for (const k of ['date', 'due_date']) { const d = Engine.parseDate(str(o[k]), false); set(k, d ? d.iso : str(o[k])); }
+  const list = v => (Array.isArray(v) ? v : v == null ? [] : Engine.splitList(v)).map(str).filter(Boolean).slice(0, 3);
+  set('phone', list(o.phone).join(', ')); set('email', list(o.email).filter(Engine.isEmail).map(e => e.toLowerCase()).join(', '));
+  if (Engine.webHref(str(o.website))) set('website', str(o.website));
   if (Array.isArray(o.totals)) res.totals = o.totals.filter(t => t && typeof t === 'object').slice(0, 12).map(t => ({ label: str(t.label).slice(0, 60), value: typeof t.value === 'number' ? t.value : Engine.toNum(str(t.value)) })).filter(t => t.label && t.value != null);
   const tl = res.totals.filter(t => /total|amount due|balance/i.test(t.label) && !/sub\s*-?\s*total|gst|tax|vat|discount/i.test(t.label)).pop(); if (tl) set('total', tl.value);
   const cols = Array.isArray(o.columns) ? o.columns.slice(0, 20).map(str) : []; const seen = new Set();
@@ -2776,14 +3316,16 @@ function gemErr(e) {
       if (e.status === 403) return 'This key is not allowed to use Gemini. Check that the Gemini API is enabled for its Google project.';
       if (e.status === 404) return 'That Gemini model is not available to this key. Choose another in Settings.';
       if (e.status >= 500) return 'Gemini is busy or having trouble. Try again in a minute.';
-      return 'Gemini refused the request' + (e.message ? ': ' + e.message : '.');
+      return 'Gemini refused the request' + (e.message ? ': ' + hideKey(e.message) : '.');
   }
   return 'Gemini could not scan this page.';
 }
 const GEM_PROMPT = 'You are reading a supplier invoice from page images, to turn it into spreadsheet rows and to mark where things are printed on each page.\n\n' +
   'Reply with only one JSON object, in exactly this shape:\n' +
-  '{"supplier": string or null, "abn": string or null, "invoice_no": string or null, "date": "YYYY-MM-DD" or null, "due_date": "YYYY-MM-DD" or null, "totals": [{"label": string, "value": number}], "columns": [string], "column_keys": [string], "rows": [[string]], "boxes": [{"label": "table" | "supplier" | "logo" | "invoice_no" | "date" | "total", "page": number, "box_2d": [ymin, xmin, ymax, xmax]}]}\n\n' +
+  '{"supplier": string or null, "abn": string or null, "invoice_no": string or null, "date": "YYYY-MM-DD" or null, "due_date": "YYYY-MM-DD" or null, "phone": [string], "email": [string], "website": string or null, "rotation": [number], "totals": [{"label": string, "value": number}], "columns": [string], "column_keys": [string], "rows": [[string]], "boxes": [{"label": "table" | "supplier" | "logo" | "invoice_no" | "date" | "total", "page": number, "box_2d": [ymin, xmin, ymax, xmax]}]}\n\n' +
   '"supplier" is the business that issued the invoice (read the logo if the name is only there), not the customer it is billed to.\n' +
+  '"phone", "email" and "website" are the issuer\'s own contact details as printed (not the customer\'s, and not a fax number); use [] or null when none are printed.\n' +
+  '"rotation" has one number per page image: how many degrees clockwise that image must be turned so its text reads upright, one of 0, 90, 180 or 270. When it is not 0, still read the page as best you can.\n' +
   '"totals" are the summary lines printed under the line items (subtotal, discount, GST, total), in order.\n' +
   '"columns" are the headings of the line-item table exactly as printed, left to right. If the table has no headings, name each column by what it holds.\n' +
   '"column_keys" says what each column holds, in the same order as "columns", whatever language the headings are in: one of "item_no", "description", "quantity", "uom" (the unit of measure), "weight", "unit_price", "discount", "gst" (tax), "amount" (the line total), or "other".\n' +
@@ -2835,6 +3377,7 @@ async function geminiScan(doc) {
   if (!Gem.key) { doc.gemPending = false; openSettings('Add a Gemini API key to scan pictures and pages that can’t be read.'); return; }
   doc.aiBusy = 'gemini'; doc.aiError = ''; doc.aiErrSet = false; doc.gemPending = false; doc.gemModel = ''; renderStatus(); renderTab();
   const ctl = S.aiCtl = new AbortController(), timer = setTimeout(() => ctl.abort(), 240000);
+  let turned = false;
   try {
     if (!Gem.models) { try { await gemList(); } catch (e) { if (e.code !== 'http' || e.status < 500) throw e; } }
     const parts = [{ text: GEM_PROMPT }], n = Math.min(doc.pages.length, 6);
@@ -2856,7 +3399,17 @@ async function geminiScan(doc) {
       }
     }
     if (!out) throw last || { code: 'empty' };
+    // a picture page Gemini says is not upright is turned and scanned once more, so the boxes land in the right place
+    if (!doc.gemTurned) {
+      const rs = Array.isArray(out.rotation) ? out.rotation : [out.rotation]; let n = 0, deg = 0;
+      for (let pi = 0; pi < Math.min(rs.length, doc.pages.length); pi++) {
+        const r = +rs[pi]; if (![90, 180, 270].includes(r) || doc.pages[pi].hasText) continue;
+        if (await turnPage(doc, pi, r)) { n++; deg = deg || r; }
+      }
+      if (n) { doc.gemTurned = true; turned = true; doc.orient = { deg, by: 'gemini', pages: n }; throw { code: 'turned' }; }
+    }
     const res = aiResult(out), placed = gemBoxes(doc, out.boxes);
+    for (const v of Object.values(res.fields)) if (v.src === 'ai') v.src = 'gemini';
     if (out.supplier == null && out.boxes == null && !res.rows.length) throw { code: 'bad_json' };
     res.docType = doc.pages[0].hasText ? Engine.docType(doc.pages[0]) : 'Invoice';
     doc.ai = res; doc.aiBy = 'gemini'; doc.aiModel = Gem.nameOf(used); doc.aiMap = {}; doc.edits = {}; doc.aiStale = false; doc.touched = true; S.sel = null;
@@ -2883,11 +3436,15 @@ async function geminiScan(doc) {
     toast(doc.aiModel + ' placed ' + placed.length + ' box' + (placed.length === 1 ? '' : 'es') + (useText ? ' and the values were read from the page text.' : ' and read ' + res.rows.length + ' line' + pl(res.rows.length) + '.'));
   } catch (e) {
     if (e && e.code === 'blocked') Gem.blocked = true;
-    doc.aiError = gemErr(e);
-    doc.aiErrSet = !!e && (e.code === 'blocked' || (e.code === 'http' && [400, 401, 403, 404, 429].includes(e.status)));
+    if (!turned) {
+      doc.aiError = gemErr(e);
+      doc.aiErrSet = !!e && (e.code === 'blocked' || (e.code === 'http' && [400, 401, 403, 404, 429].includes(e.status)));
+    }
   }
   clearTimeout(timer); if (S.aiCtl === ctl) S.aiCtl = null;
-  doc.aiBusy = false; doc.gemModel = ''; run(doc); renderAll();
+  doc.aiBusy = false; doc.gemModel = '';
+  if (turned) { await reanalyse(doc); if (doc === cur()) { await showPage(); fit(); } renderAll(); return geminiScan(doc); }
+  run(doc); renderAll();
 }
 async function pumpGemini() {
   if (Gem.running) return; Gem.running = true;
@@ -2903,24 +3460,43 @@ function queueGemini(doc) {
 function openSettings(note) {
   S.setNote = note || ''; renderSettings(''); $('#settings').hidden = false;
   setTimeout(() => { const k = $(Gem.key ? '#g-model' : '#g-key'); if (k) k.focus(); }, 30);
+  if (Files.dir) { const was = Files.perm; Files.ready(false).then(() => { if (Files.perm !== was && !$('#settings').hidden) renderSettings(''); }); }
 }
-function closeSettings() { $('#settings').hidden = true; S.setNote = ''; renderStatus(); }
+function closeSettings() {
+  const k = $('#g-key'); if (k && k.value.trim()) { Gem.setKey(k.value.trim()); k.value = ''; }        // a pasted key is kept even without Save key
+  $('#settings').hidden = true; S.setNote = ''; S.keyEdit = false; renderStatus();
+}
 function renderSettings(msg) {
   const ms = Gem.models, a = ms ? gemPick('any') : null, f = ms ? gemPick('flash') : null;
   const opts = [['auto', 'Newest model' + (a ? ': ' + a.name : '')], ['flash', 'Newest Flash, faster and cheaper' + (f ? ': ' + f.name : '')]].concat((ms || []).map(m => [m.id, m.name + (m.preview ? ' (preview)' : '')]));
   if (!opts.some(o => o[0] === Gem.model)) opts.push([Gem.model, Gem.model]);
-  $('#settings').innerHTML = '<div class="card"><h2 id="setTitle">Scanning with Gemini<button class="iconbtn" type="button" data-set="close" aria-label="Close settings">&times;</button></h2>' +
+  // the saved key is never written back into the page: there is only a "saved" state, Replace and Forget
+  const keyBox = Gem.key && !S.keyEdit
+    ? '<div class="keysaved"><span class="pill good">Key saved' + (Gem.remember ? ' in this browser' : ' until this page closes') + '</span><button class="btn small" type="button" data-set="replace">Replace</button><button class="btn small" type="button" data-set="forget">Forget</button></div>'
+    : '<div class="row"><input id="g-key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="' + (Gem.key ? 'Paste the new key' : 'Paste the key from Google AI Studio') + '" aria-describedby="g-keynote"><button class="btn small primary" type="button" data-set="savekey" disabled>Save key</button>' +
+      (Gem.key ? '<button class="btn small" type="button" data-set="cancelkey">Cancel</button>' : '') + '</div>';
+  const folder = !Files.can
+    ? '<p class="note">This browser can’t save invoices into a folder you choose: Safari, iPhone and iPad, Firefox and Android don’t let web pages do that. Each invoice has a <b>Download a copy</b> button under Details instead. Chrome or Edge on a computer can save into a folder.</p>'
+    : (Files.dir
+      ? '<div class="keysaved"><span class="pill ' + (Files.perm === 'granted' ? 'good' : 'warn') + '">' + esc(Files.dir.name) + (Files.perm === 'granted' ? '' : ': needs permission again') + '</span>' + (Files.perm === 'granted' ? '' : '<button class="btn small primary" type="button" data-set="folder-allow">Allow</button>') + '<button class="btn small" type="button" data-set="folder-pick">Change</button><button class="btn small" type="button" data-set="folder-forget">Stop</button></div>'
+      : '<div class="row"><button class="btn small primary" type="button" data-set="folder-pick">Choose folder</button><span class="note">None chosen yet.</span></div>') +
+      '<label class="chk" for="f-auto"><input type="checkbox" id="f-auto"' + (Files.auto ? ' checked' : '') + '>Save every invoice I open into this folder</label>' +
+      '<label class="chk" for="f-sub"><input type="checkbox" id="f-sub"' + (Files.sub ? ' checked' : '') + '>One folder per supplier, files named date and invoice number</label>' +
+      '<p class="note">The original file is left where it was. Each invoice has Copy and Move under Details; Move can delete the original only for files opened with the Open button.</p>';
+  $('#settings').innerHTML = '<div class="card"><h2 id="setTitle">Settings<button class="iconbtn" type="button" data-set="close" aria-label="Close settings">&times;</button></h2>' +
     (S.setNote ? '<p class="pill warn">' + esc(S.setNote) + '</p>' : '') +
+    '<h3 class="sec">Invoice folder</h3>' + folder +
+    '<h3 class="sec">Scanning with Gemini</h3>' +
     '<p class="note">When a page is a picture, or its text can’t be read, Gemini looks at it, places the boxes and reads the line items. On pages with readable text the values still come from the text, so they stay exact.</p>' +
     (S.standalone ? '' : '<p class="pill warn">Inside Claude this page can only reach Claude, so Gemini works in your own copy of the page: the invoice_scraper.html file opened in Chrome, Edge or Safari, or put on your own site.</p>') +
-    '<div class="field"><label for="g-key">Gemini API key</label><div class="row"><input id="g-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste the key from Google AI Studio" value="' + esc(Gem.key) + '"><button class="btn small" type="button" data-set="show" aria-pressed="false">Show</button></div>' +
-    '<p class="note">Make one at aistudio.google.com/apikey (<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">open it</a>). The key and the page images go only to Google, and scans are billed to that key’s Google account.</p></div>' +
+    '<div class="field"><label for="g-key">Gemini API key</label>' + keyBox +
+    '<p class="note" id="g-keynote">Make one at aistudio.google.com/apikey (<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">open it</a>). Once saved, the key is never shown again, not even here. It goes only to Google, with the page images, and scans are billed to that key’s Google account.</p></div>' +
     '<label class="chk" for="g-remember"><input type="checkbox" id="g-remember"' + (Gem.remember ? ' checked' : '') + '>Remember the key in this browser</label>' +
     '<div class="field"><label for="g-model">Model</label><select id="g-model">' + opts.map(o => '<option value="' + esc(o[0]) + '"' + (o[0] === Gem.model ? ' selected' : '') + '>' + esc(o[1]) + '</option>').join('') + '</select>' +
     '<p class="note">Newest model picks the latest Gemini your key can use, from Google’s own list. If the key can’t use it (the newest Pro-class model may need a paid key), the scan steps down to the newest Flash.</p></div>' +
     '<label class="chk" for="g-auto"><input type="checkbox" id="g-auto"' + (Gem.auto ? ' checked' : '') + '>Scan automatically when an opened page is a picture or can’t be read</label>' +
-    '<div class="row"><button class="btn primary" type="button" data-set="check"' + (Gem.key ? '' : ' disabled') + '>Check key</button><button class="btn" type="button" data-set="forget"' + (Gem.key ? '' : ' disabled') + '>Forget key</button><button class="btn" type="button" data-set="close">Done</button></div>' +
-    '<p class="note" id="g-msg" aria-live="polite">' + msg + '</p></div>';
+    '<div class="row"><button class="btn primary" type="button" data-set="check"' + (Gem.key ? '' : ' disabled') + '>Check key</button><button class="btn" type="button" data-set="close">Done</button></div>' +
+    '<p class="note" id="g-msg" aria-live="polite">' + hideKey(msg) + '</p></div>';
 }
 function gemModelsLine() {
   const a = gemPick('any'), f = gemPick('flash');
@@ -2931,10 +3507,17 @@ $('#settings').addEventListener('click', async e => {
   const b = e.target.closest('button[data-set]'); if (!b) return;
   const act = b.dataset.set, key = $('#g-key');
   if (act === 'close') return closeSettings();
-  if (act === 'show') { const on = key.type === 'password'; key.type = on ? 'text' : 'password'; b.textContent = on ? 'Hide' : 'Show'; b.setAttribute('aria-pressed', String(on)); return; }
-  if (act === 'forget') { Gem.setKey(''); renderSettings('Key removed from this page.'); renderStatus(); return; }
+  if (act === 'replace') { S.keyEdit = true; renderSettings(''); const k = $('#g-key'); if (k) k.focus(); return; }
+  if (act === 'cancelkey') { S.keyEdit = false; renderSettings(''); return; }
+  if (act === 'savekey') { const v = key ? key.value.trim() : ''; if (key) key.value = ''; if (!v) return; Gem.setKey(v); S.keyEdit = false; renderSettings('Key saved. Check it to see which models it can use.'); renderStatus(); return; }
+  if (act === 'forget') { Gem.setKey(''); S.keyEdit = false; renderSettings('Key removed from this page.'); renderStatus(); return; }
+  if (act === 'folder-pick') { await pickFolder(); renderSettings(''); return; }
+  if (act === 'folder-allow') { if (await Files.ready(true)) { Files.waiting = false; S.docs.forEach(queueFileSave); await flushFileSave(true); } renderSettings(''); renderAll(); return; }
+  if (act === 'folder-forget') { await Files.forget(); renderSettings('Invoices will no longer be saved into a folder.'); renderAll(); return; }
   if (act === 'check') {
-    Gem.setKey(key.value); const msg = $('#g-msg'); msg.textContent = 'Asking Google which models this key can use…'; b.disabled = true;
+    if (key && key.value.trim()) { Gem.setKey(key.value.trim()); key.value = ''; S.keyEdit = false; }
+    if (!Gem.key) return;
+    renderSettings('Asking Google which models this key can use…'); const btn = $('#settings [data-set="check"]'); if (btn) btn.disabled = true;
     try { await gemList(true); Gem.noUse = {}; renderSettings(gemModelsLine()); }
     catch (err) { if (err && err.code === 'blocked') Gem.blocked = true; renderSettings(esc(gemErr(err))); }
     renderStatus();
@@ -2942,23 +3525,36 @@ $('#settings').addEventListener('click', async e => {
 });
 $('#settings').addEventListener('change', e => {
   const t = e.target;
-  if (t.id === 'g-key') {
-    // update in place: re-drawing the dialog here would swallow a click on Check key that caused this change
-    Gem.setKey(t.value); $('#g-msg').textContent = Gem.key ? 'Key saved. Check it to see which models it can use.' : '';
-    $('#settings').querySelectorAll('[data-set="check"], [data-set="forget"]').forEach(x => { x.disabled = !Gem.key; });
-  }
-  else if (t.id === 'g-remember') { Gem.remember = t.checked; Gem.save(); }
+  if (t.id === 'g-key') return;                                                 // saved only by Save key, then cleared
+  if (t.id === 'g-remember') { Gem.remember = t.checked; Gem.save(); }
   else if (t.id === 'g-model') { Gem.model = t.value; Gem.noUse = {}; Gem.save(); }
   else if (t.id === 'g-auto') { Gem.auto = t.checked; Gem.save(); }
+  else if (t.id === 'f-auto') { Files.auto = t.checked; Files.save(); if (Files.auto) { S.docs.forEach(queueFileSave); } }
+  else if (t.id === 'f-sub') { Files.sub = t.checked; Files.save(); }
   renderStatus();
 });
-$('#settings').addEventListener('input', e => { if (e.target.id === 'g-key') { const on = !!e.target.value.trim(); $('#settings [data-set="check"]').disabled = !on; } });
+$('#settings').addEventListener('input', e => { if (e.target.id === 'g-key') { const on = !!e.target.value.trim(); const sb = $('#settings [data-set="savekey"]'); if (sb) sb.disabled = !on; } });
+$('#settings').addEventListener('keydown', e => { if (e.target.id === 'g-key' && e.key === 'Enter') { e.preventDefault(); const sb = $('#settings [data-set="savekey"]'); if (sb && !sb.disabled) sb.click(); } });
+// the key never appears in a message, whatever an error or a server says
+function hideKey(s) {
+  s = String(s == null ? '' : s);
+  if (Gem.key && Gem.key.length >= 8) s = s.split(Gem.key).join('••••');
+  return s.replace(/AIza[0-9A-Za-z_\-]{20,}/g, '••••');
+}
 
 
 /* ================= shell ================= */
-function toast(msg, kind) { const t = $('#toast'); t.textContent = msg; t.className = 'toast' + (kind ? ' ' + kind : ''); t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, kind ? 6500 : 3200); }
+function toast(msg, kind) { const t = $('#toast'); t.textContent = hideKey(msg); t.className = 'toast' + (kind ? ' ' + kind : ''); t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, kind ? 6500 : 3200); }
 function busy(msg) { const b = $('#busy'); b.hidden = !msg; b.textContent = msg || ''; }
-$('#openBtn').addEventListener('click', () => $('#file').click());
+$('#openBtn').addEventListener('click', async () => {
+  if (!Files.canOpen) { $('#file').click(); return; }
+  let hs;
+  try { hs = await window.showOpenFilePicker({ id: 'invoice-open', multiple: true, types: [{ description: 'Invoices', accept: { 'application/pdf': ['.pdf'], 'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'] } }] }); }
+  catch (e) { if (!e || e.name !== 'AbortError') $('#file').click(); return; }
+  const list = [];
+  for (const h of hs) { try { list.push({ file: await h.getFile(), handle: h }); } catch (e) {} }
+  addFiles(list);
+});
 $('#setBtn').addEventListener('click', () => openSettings());
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#settings').hidden) { e.stopImmediatePropagation(); closeSettings(); $('#setBtn').focus(); } }, true);
 $('#file').addEventListener('change', e => { const fs = Array.from(e.target.files || []); e.target.value = ''; addFiles(fs); });
@@ -2968,7 +3564,16 @@ const viewer = $('#viewer'); let dragN = 0;
 viewer.addEventListener('dragenter', e => { if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) { dragN++; $('#drop').hidden = false; e.preventDefault(); } });
 viewer.addEventListener('dragover', e => { if (!$('#drop').hidden) e.preventDefault(); });
 viewer.addEventListener('dragleave', () => { dragN = Math.max(0, dragN - 1); if (!dragN) $('#drop').hidden = true; });
-viewer.addEventListener('drop', e => { e.preventDefault(); dragN = 0; $('#drop').hidden = true; if (e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+viewer.addEventListener('drop', e => {
+  e.preventDefault(); dragN = 0; $('#drop').hidden = true;
+  const dt = e.dataTransfer; if (!dt || !dt.files.length) return;
+  const files = Array.from(dt.files), items = Array.from(dt.items || []).filter(i => i.kind === 'file');
+  // handles must be asked for during the drop event itself; with one, a later Move can delete the original
+  if (items.length === files.length && typeof items[0].getAsFileSystemHandle === 'function') {
+    const ps = items.map(i => i.getAsFileSystemHandle().catch(() => null));
+    Promise.all(ps).then(hs => addFiles(files.map((f, k) => ({ file: f, handle: hs[k] && hs[k].kind === 'file' ? hs[k] : null })))).catch(() => addFiles(files));
+  } else addFiles(files);
+});
 document.addEventListener('paste', e => { const fs = e.clipboardData && e.clipboardData.files; if (fs && fs.length) { e.preventDefault(); addFiles(fs); } });
 window.addEventListener('pagehide', flushSync); document.addEventListener('visibilitychange', () => { if (document.hidden) flushSync(); });
 window.addEventListener('storage', e => { if (e.key === Lib.KEY) { Lib.load(); renderStatus(); renderTabs(); if (S.tab === 'library') renderLibrary(); } });
@@ -2985,12 +3590,14 @@ async function initCaps() {
 }
 (async function start() {
   S.templates = Store.loadLocal(); Lib.load(); Gem.load();
+  try { S.autoTpl = localStorage.getItem(AUTO_TPL_KEY) !== '0'; } catch (e) { S.autoTpl = true; }
+  Files.load().then(() => { renderStatus(); if (S.tab === 'details') renderDetails(); });
   renderAll();
   initCaps();
   try { const d = await loadSample(); S.docs.push(d); S.cur = 0; await analyse(d); await showPage(); fit(); } catch (e) {}
   renderAll();
 })();
-if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) window.__scraper = { S, Engine, Library, Lib, Gem, addFiles, run, renderAll, flushSync, geminiScan };
+if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) window.__scraper = { S, Engine, Library, Lib, Gem, Files, addFiles, run, renderAll, flushSync, geminiScan, inkTurn, rotCanvas, flushAutoTpl, flushFileSave, fileTo, toast, hideKey };
 })();
 </script>
 </body>
