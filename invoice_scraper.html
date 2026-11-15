@@ -238,6 +238,7 @@ table.libsheet { border-collapse: separate; border-spacing: 0; width: max-conten
 .sheet-exp:hover { color: var(--ink); }
 .libsheet .code { font: 500 12px var(--font-data); background: var(--wash); border-radius: 3px; padding: 1px 5px; }
 .libsheet .delta { margin-left: 0; }
+.libsheet .puom { margin-left: 4px; color: var(--muted); font-weight: 500; }
 .libsheet td.act, .libsheet th.act { width: 1%; padding: 0 4px; text-align: center; }
 .libsheet tr.hist td { padding: 0; height: auto; white-space: normal; background: var(--bg); cursor: default; border-bottom: 1px solid var(--line); }
 .libsheet tr.hist:hover td { background: var(--bg); }
@@ -1398,6 +1399,37 @@ const Library = (() => {
   const COLS = Engine.FIELDS.map(f => f.key);
   const NUMK = new Set(Engine.FIELDS.filter(f => f.numeric).map(f => f.key));
   const norm = Engine.norm, toNum = Engine.toNum;
+  // Spelling of one unit only. ea/each share a series; each vs carton, and kg vs g, do not.
+  const UOM_ALIAS = {
+    ea: 'ea', each: 'ea',
+    kg: 'kg', kgs: 'kg', kilo: 'kg', kilos: 'kg', kilogram: 'kg', kilograms: 'kg',
+    g: 'g', gm: 'g', gms: 'g', gram: 'g', grams: 'g',
+    l: 'l', lt: 'l', ltr: 'l', litre: 'l', litres: 'l', liter: 'l', liters: 'l',
+    ml: 'ml', mls: 'ml', millilitre: 'ml', millilitres: 'ml', milliliter: 'ml', milliliters: 'ml',
+    ctn: 'ctn', carton: 'ctn', cartons: 'ctn',
+    unit: 'unit', units: 'unit',
+    box: 'box', boxes: 'box', bx: 'box',
+    pk: 'pk', pkt: 'pk', pkts: 'pk', pack: 'pk', packs: 'pk', packet: 'pk', packets: 'pk',
+    doz: 'doz', dozen: 'doz', dz: 'doz',
+    bag: 'bag', bags: 'bag',
+    btl: 'btl', btls: 'btl', bottle: 'btl', bottles: 'btl',
+    cs: 'cs', case: 'cs', cases: 'cs',
+    pc: 'pc', pcs: 'pc', pce: 'pc', piece: 'pc', pieces: 'pc',
+    pr: 'pr', pair: 'pr', pairs: 'pr',
+    m: 'm', mtr: 'm', metre: 'm', metres: 'm', meter: 'm', meters: 'm',
+    hr: 'hr', hrs: 'hr', hour: 'hr', hours: 'hr',
+    tray: 'tray', trays: 'tray', tub: 'tub', tubs: 'tub', tin: 'tin', tins: 'tin', can: 'can', cans: 'can',
+    roll: 'roll', rolls: 'roll', set: 'set', sets: 'set', drum: 'drum', drums: 'drum',
+    pail: 'pail', pails: 'pail', slab: 'slab', slabs: 'slab',
+    bunch: 'bunch', bunches: 'bunch', bch: 'bunch', punnet: 'punnet', punnets: 'punnet', pun: 'punnet',
+    sleeve: 'sleeve', sleeves: 'sleeve', jar: 'jar', jars: 'jar', sack: 'sack', sacks: 'sack',
+    crate: 'crate', crates: 'crate', outer: 'outer', outers: 'outer', inner: 'inner', inners: 'inner',
+    bale: 'bale', bales: 'bale', lb: 'lb', lbs: 'lb', pound: 'lb', pounds: 'lb'
+  };
+  function uomCanon(uom) {
+    const s = norm(uom).replace(/ /g, '');
+    return s ? (UOM_ALIAS[s] || s) : '';
+  }
   const str = (v, n) => (v == null || typeof v === 'object' ? '' : String(v)).replace(/\s+/g, ' ').trim().slice(0, n || 200);
   const isIso = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
   const srcOf = s => (s === 'gemini' ? 'gemini' : s === 'claude' || s === 'ai' ? 'claude' : 'text');   // 'ai' is the older name for Claude
@@ -1527,28 +1559,31 @@ const Library = (() => {
     for (const inv of invs) {
       const sk = supKey(inv); sups.add(sk);
       for (const L of inv.lines) {
-        const id = sk + '|' + (L.item_no != null && String(L.item_no) !== '' ? 'n:' + norm(L.item_no).replace(/ /g, '') : 'd:' + norm(L.description));
+        const ident = sk + '|' + (L.item_no != null && String(L.item_no) !== '' ? 'n:' + norm(L.item_no).replace(/ /g, '') : 'd:' + norm(L.description));
+        const canon = uomCanon(L.uom);
+        const id = ident + '|' + canon;
         let it = map.get(id);
-        if (!it) { it = { key: id, supplier: '', item_no: '', description: '', uom: '', uoms: new Set(), qty: 0, spend: 0, lines: 0, invs: new Set(), prices: [], history: [], firstDate: when(inv), lastDate: '' }; map.set(id, it); }
+        if (!it) { it = { key: id, ident, supplier: '', item_no: '', description: '', uom: '', uoms: new Set(), qty: 0, spend: 0, lines: 0, invs: new Set(), prices: [], history: [], firstDate: when(inv), lastDate: '' }; map.set(id, it); }
         if (inv.supplier) it.supplier = inv.supplier;
         if (L.item_no != null) it.item_no = String(L.item_no);
         if (L.description != null) it.description = String(L.description);
-        if (L.uom != null) { it.uom = String(L.uom); it.uoms.add(norm(L.uom)); }
+        if (String(L.uom || '').trim()) { it.uom = String(L.uom).trim(); it.uoms.add(canon); }
         if (typeof L.quantity === 'number') it.qty += L.quantity;
         if (typeof L.amount === 'number') it.spend += L.amount;
         it.lines++; it.invs.add(inv.key); it.lastDate = when(inv);
-        if (typeof L.unit_price === 'number') it.prices.push({ inv: inv.key, price: L.unit_price });
+        if (typeof L.unit_price === 'number') it.prices.push({ inv: inv.key, price: L.unit_price, uom: String(L.uom || '').trim() });
         const rec = Object.assign({ inv: inv.key, item: id, date: when(inv), supplier: inv.supplier, invoice_no: inv.invoice_no, phone: inv.phone || '', email: inv.email || '' }, L);
         it.history.push(rec); records.push(rec);
       }
     }
     const hidden = store.hidden || {}, ignored = store.ignored || {}, items = []; let nHidden = 0;
     for (const it of map.values()) {
-      if (hidden[it.key]) { nHidden++; continue; }
-      it.ignored = keyIsIgnored(ignored, it.key);
+      if (hidden[it.key] || (it.ident && hidden[it.ident])) { nHidden++; continue; }
+      it.ignored = keyIsIgnored(ignored, it.ident || it.key);
       const last = it.prices[it.prices.length - 1] || null; let prev = null;
       if (last) for (let k = it.prices.length - 2; k >= 0; k--) if (it.prices[k].inv !== last.inv) { prev = it.prices[k]; break; }
-      it.lastPrice = last ? last.price : null; it.prevPrice = prev ? prev.price : null;
+      it.lastPrice = last ? last.price : null; it.lastUom = last ? last.uom : (it.uom || '');
+      it.prevPrice = prev ? prev.price : null; it.prevUom = prev ? prev.uom : '';
       it.delta = last && prev && prev.price ? (last.price - prev.price) / Math.abs(prev.price) : null;
       it.qty = r4(it.qty); it.spend = r2(it.spend); it.nInv = it.invs.size; it.mixed = it.uoms.size > 1;
       it.history.reverse(); delete it.prices; delete it.invs; delete it.uoms;
@@ -2885,9 +2920,16 @@ function libHead(cols, view) {
     return '<th class="' + (c.cls || '') + (on ? ' on' : '') + '"><button type="button" data-lib-sort="' + c.key + '" data-lib-dir="' + (c.dir || 'asc') + '" aria-sort="' + (on ? (dir === 'asc' ? 'ascending' : 'descending') : 'none') + '">' + esc(c.label) + '<span class="so" aria-hidden="true">' + arrow + '</span></button></th>';
   }).join('') + '</tr></thead>';
 }
+function priceHtml(price, uom) {
+  const text = fmtPrice(price);
+  if (!text) return '';
+  const u = uom != null ? String(uom).trim() : '';
+  return esc(text) + (u ? ' <span class="puom">' + esc(u) + '</span>' : '');
+}
 function libDeltaHtml(it) {
   if (it.delta == null || Math.abs(it.delta) < 0.0005) return '';
-  return '<span class="delta ' + (it.delta > 0 ? 'up' : 'down') + '" title="Against the invoice before, ' + fmtPrice(it.prevPrice) + '">' + (it.delta > 0 ? '↑ ' : '↓ ') + Math.abs(it.delta * 100).toFixed(1) + '%</span>';
+  const prev = fmtPrice(it.prevPrice) + (it.prevUom ? ' ' + it.prevUom : '');
+  return '<span class="delta ' + (it.delta > 0 ? 'up' : 'down') + '" title="Against the invoice before, ' + esc(prev) + '">' + (it.delta > 0 ? '↑ ' : '↓ ') + Math.abs(it.delta * 100).toFixed(1) + '%</span>';
 }
 function libItemRows(it, n, nCols) {
   const open = S.lib.open === it.key, d = libDeltaHtml(it), uom = it.mixed ? 'mixed' : (it.uom || '');
@@ -2898,13 +2940,13 @@ function libItemRows(it, n, nCols) {
     '<td class="clip" title="' + esc(it.supplier || '') + '">' + esc(it.supplier || 'Unknown supplier') + '</td>' +
     '<td class="num">' + esc(fmtQty(it.qty)) + '</td>' +
     '<td>' + esc(uom) + '</td>' +
-    '<td class="num">' + (it.lastPrice != null ? esc(fmtPrice(it.lastPrice)) : '') + '</td>' +
+    '<td class="num">' + (it.lastPrice != null ? priceHtml(it.lastPrice, it.lastUom || it.uom) : '') + '</td>' +
     '<td>' + esc(niceDate(it.lastDate)) + '</td>' +
     '<td class="num">' + d + '</td>' +
     '<td class="num">' + it.nInv + '</td>' +
     '<td class="num">' + money(it.spend) + '</td></tr>';
   if (open) h += '<tr class="hist"><td colspan="' + nCols + '"><div class="sheet-hist"><table class="libsheet nested"><thead><tr><th>Date</th><th>Invoice</th><th class="num">Qty</th><th>UOM</th><th class="num">Unit price</th><th class="num">Amount</th></tr></thead><tbody>' +
-    it.history.map(r => '<tr><td>' + esc(niceDate(r.date)) + '</td><td>' + esc(r.invoice_no || '') + '</td><td class="num">' + esc(fmtQty(r.quantity)) + '</td><td>' + esc(r.uom || '') + '</td><td class="num">' + esc(fmtPrice(r.unit_price)) + '</td><td class="num">' + esc(typeof r.amount === 'number' ? money(r.amount) : (r.amount || '')) + '</td></tr>').join('') +
+    it.history.map(r => '<tr><td>' + esc(niceDate(r.date)) + '</td><td>' + esc(r.invoice_no || '') + '</td><td class="num">' + esc(fmtQty(r.quantity)) + '</td><td>' + esc(r.uom || '') + '</td><td class="num">' + priceHtml(r.unit_price, r.uom) + '</td><td class="num">' + esc(typeof r.amount === 'number' ? money(r.amount) : (r.amount || '')) + '</td></tr>').join('') +
     '</tbody></table><div class="under"><span>' + it.lines + ' record' + pl(it.lines) + ', ' + money(it.spend) + ' in total</span><button class="link" type="button" data-hide="' + esc(it.key) + '">Hide this item from the library</button></div></div></td></tr>';
   return h;
 }
@@ -2925,7 +2967,7 @@ function libInvRows(i, n, nCols) {
         '<td>' + (L.item_no != null && L.item_no !== '' ? '<span class="code">' + esc(String(L.item_no)) + '</span>' : '') + '</td>' +
         '<td class="clip" title="' + esc(L.description || '') + '">' + esc(L.description || '') + (off ? '<span class="offmark">ignored</span>' : '') + '</td>' +
         '<td class="num">' + esc(fmtQty(L.quantity)) + '</td><td>' + esc(L.uom || '') + '</td>' +
-        '<td class="num">' + esc(fmtPrice(L.unit_price)) + '</td>' +
+        '<td class="num">' + priceHtml(L.unit_price, L.uom) + '</td>' +
         '<td class="num">' + esc(typeof L.amount === 'number' ? money(L.amount) : (L.amount || '')) + '</td></tr>';
     }).join('') +
     '</tbody></table></div></td></tr>';
@@ -2954,7 +2996,7 @@ function renderLibrary() {
       { key: 'lastDate', label: 'Last date', dir: 'desc' }, { key: 'delta', label: 'Change', cls: 'num', dir: 'desc' }, { key: 'nInv', label: 'Invoices', cls: 'num', dir: 'desc' },
       { key: 'spend', label: 'Spend', cls: 'num', dir: 'desc' }
     ];
-    const items = a.items.filter(it => has(it.item_no + ' ' + it.description + ' ' + it.supplier));
+    const items = a.items.filter(it => has(it.item_no + ' ' + it.description + ' ' + it.supplier + ' ' + (it.uom || '')));
     libOrder(items, 'items');
     h = items.length ? '<table class="libsheet">' + libHead(cols, 'items') + '<tbody>' + items.slice(0, L.limit).map((it, i) => libItemRows(it, i + 1, cols.length)).join('') + '</tbody></table>' + more(items.length) : none;
   } else if (L.view === 'records') {
@@ -2963,7 +3005,7 @@ function renderLibrary() {
       .concat(F.map(f => ({ key: f.key, label: f.label, cls: f.numeric ? 'num' : '', dir: f.numeric ? 'desc' : 'asc' })));
     const recs = a.records.filter(r => has((r.item_no || '') + ' ' + (r.description || '') + ' ' + r.supplier + ' ' + r.invoice_no));
     libOrder(recs, 'records');
-    const cell = (r, k) => { const v = r[k]; return '<td class="' + (num(k) ? 'num' : k === 'description' ? 'clip' : '') + '"' + (k === 'description' && v ? ' title="' + esc(v) + '"' : '') + '>' + esc(v == null ? '' : k === 'unit_price' ? fmtPrice(v) : k === 'quantity' || k === 'weight' ? fmtQty(v) : num(k) && typeof v === 'number' ? v.toFixed(2) : v) + '</td>'; };
+    const cell = (r, k) => { const v = r[k]; const inner = k === 'unit_price' ? priceHtml(v, r.uom) : esc(v == null ? '' : k === 'quantity' || k === 'weight' ? fmtQty(v) : num(k) && typeof v === 'number' ? v.toFixed(2) : v); return '<td class="' + (num(k) ? 'num' : k === 'description' ? 'clip' : '') + '"' + (k === 'description' && v ? ' title="' + esc(v) + '"' : '') + '>' + inner + '</td>'; };
     h = recs.length ? '<table class="libsheet">' + libHead(cols, 'records') + '<tbody>' + recs.slice(0, L.limit).map((r, i) => '<tr><td class="rn">' + (i + 1) + '</td><td>' + esc(niceDate(r.date)) + '</td><td class="clip" title="' + esc(r.supplier) + '">' + esc(r.supplier) + '</td><td>' + esc(r.invoice_no) + '</td>' + F.map(f => cell(r, f.key)).join('') + '</tr>').join('') + '</tbody></table>' + more(recs.length) : none;
   } else {
     const cols = [
