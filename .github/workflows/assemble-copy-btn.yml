@@ -1,0 +1,42 @@
+name: assemble-copy-btn
+on:
+  push:
+    paths:
+      - '.bootstrap/copy-btn.u0.patch.gz.hex'
+      - '.github/workflows/assemble-copy-btn.yml'
+permissions:
+  contents: write
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply patch and verify
+        run: |
+          python3 << 'PY'
+          from pathlib import Path
+          import gzip, hashlib, subprocess
+          hexed = Path('.bootstrap/copy-btn.u0.patch.gz.hex').read_text().strip()
+          raw = gzip.decompress(bytes.fromhex(hexed))
+          expect_patch = 'cdeb5799baadb8ab7f2f3f5cd12a271bcc0a0cfe969a859dfe38a37a9f592ba8'
+          got = hashlib.sha256(raw).hexdigest()
+          if got != expect_patch:
+              raise SystemExit('patch hash mismatch ' + got)
+          Path('/tmp/copy-btn.u0.patch').write_bytes(raw)
+          subprocess.check_call(['git', 'apply', '--unidiff-zero', '/tmp/copy-btn.u0.patch'])
+          html = Path('invoice_scraper.html').read_bytes()
+          expect_html = '7a16ce9f387f55b7804f735c302c276723a74a9ee9c1cee2e4f869bfcb750dee'
+          got_html = hashlib.sha256(html).hexdigest()
+          if got_html != expect_html:
+              raise SystemExit('html hash mismatch ' + got_html)
+          print('assembled', len(html), got_html)
+          PY
+      - name: Commit assembled HTML and remove bootstrap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .bootstrap/copy-btn.u0.patch.gz.hex .github/workflows/assemble-copy-btn.yml
+          rmdir .bootstrap 2>/dev/null || true
+          git add -A invoice_scraper.html .bootstrap .github/workflows/assemble-copy-btn.yml
+          git commit -m "Add Copy button for visible table TSV"
+          git push
