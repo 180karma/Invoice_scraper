@@ -1,0 +1,102 @@
+diff --git a/invoice_scraper.html b/invoice_scraper.html
+index 3a67d23..38eefe8 100644
+--- a/invoice_scraper.html
++++ b/invoice_scraper.html
+@@ -3867,0 +3868,19 @@ const nowIso = () => new Date().toISOString();
++// Postgres refuses NUL and unpaired surrogates (PDF text can carry both), and one bad row would stall the whole queue
++function sbSafe(v) {
++  if (typeof v === 'string') {
++    let s = v.indexOf('\u0000') >= 0 ? v.replace(/\u0000/g, '') : v;
++    if (!/[\ud800-\udfff]/.test(s)) return s;
++    if (typeof s.toWellFormed === 'function') return s.toWellFormed();
++    let out = '';
++    for (let i = 0; i < s.length; i++) {
++      const c = s.charCodeAt(i);
++      if (c >= 0xd800 && c <= 0xdbff && (s.charCodeAt(i + 1) & 0xfc00) === 0xdc00) { out += s[i] + s[i + 1]; i++; }
++      else out += (c & 0xf800) === 0xd800 ? '\ufffd' : s[i];
++    }
++    return out;
++  }
++  if (Array.isArray(v)) return v.map(sbSafe);
++  if (v && typeof v === 'object') { const o = {}; for (const [k, x] of Object.entries(v)) o[sbSafe(k)] = sbSafe(x); return o; }
++  return v;
++}
++const sbHashErr = h => { try { return new URLSearchParams(String(h || '').replace(/^#/, '')).get('error_description') || ''; } catch (e) { return ''; } };
+@@ -3882 +3901 @@ const Cloud = {
+-  sentTo: '', keyEdit: false, msg: '', dirty: {}, meta: null, tplSnap: {}, timer: 0, tries: 0, chain: Promise.resolve(), connecting: null,
++  sentTo: '', email: '', keyEdit: false, msg: '', dirty: {}, meta: null, tplSnap: {}, timer: 0, tries: 0, chain: Promise.resolve(), connecting: null,
+@@ -3951,0 +3971 @@ const Cloud = {
++      const linkErr = sbHashErr(location.hash);
+@@ -3954,4 +3974,7 @@ const Cloud = {
+-        this.sb = lib.createClient(this.url, this.key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit', storageKey: 'invoice-scraper.supabase-auth' } });
+-        this.sb.auth.onAuthStateChange((ev, session) => { setTimeout(() => this.authed(session), 0); });
+-        const r = await this.sb.auth.getSession();
+-        if (/access_token|error_description/.test(location.hash)) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }
++        const sb = this.sb = lib.createClient(this.url, this.key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit', storageKey: 'invoice-scraper.supabase-auth' } });
++        // a client replaced by a new key or project URL must not sign the new one out
++        sb.auth.onAuthStateChange((ev, session) => { setTimeout(() => { if (this.sb === sb) this.authed(session); }, 0); });
++        const r = await sb.auth.getSession();
++        if (/access_token|error_description/.test(location.hash) || /#$/.test(location.href)) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }
++        if (this.sb !== sb) return false;
++        if (linkErr) this.linkFailed(linkErr);
+@@ -3971 +3994 @@ const Cloud = {
+-    this.sentTo = ''; renderSb();
++    this.sentTo = ''; renderSb(/^(Key saved|To finish signing in)/.test(this.msg) ? '' : null);
+@@ -3973,0 +3997,5 @@ const Cloud = {
++  linkFailed(desc) {
++    const m = /expired|invalid/i.test(desc) ? 'That sign-in link has expired or was already used. Some email apps open links to check them, which uses them up. Send a new email and open the link once.'
++      : 'Supabase could not sign you in from that link: ' + hideKey(desc).slice(0, 160);
++    renderSb(m); toast(m, 'bad');
++  },
+@@ -3976,2 +4004,2 @@ const Cloud = {
+-    if (this.sb) { try { await this.sb.auth.signOut({ scope: 'local' }); } catch (e) {} }
+-    this.sb = null; this.user = null; this.setState('off');
++    const sb = this.sb; this.sb = null; this.user = null; this.setState('off');
++    if (sb) { try { await sb.auth.signOut({ scope: 'local' }); } catch (e) {} }
+@@ -3983 +4011,2 @@ const Cloud = {
+-  syncNow() { return this.queue(async () => { if (await this.flush()) { await this.pull(); await this.flush(); } }); },
++  // pull even when sending failed: the merge is newest-wins, so a row Supabase refuses must not keep this device empty
++  syncNow() { return this.queue(async () => { const sent = await this.flush(); if (!sent && (!this.ready() || this.state === 'offline')) return; if ((await this.pull()) && this.pending()) await this.flush(); }); },
+@@ -3994,0 +4024,10 @@ const Cloud = {
++  // why a sign-in email was not sent, in the words of the Supabase setting to change
++  sayAuth(e) {
++    const m = String((e && e.message) || '') + ' ' + String((e && e.code) || ''), secs = m.match(/after (\d+) seconds?/i);
++    if (secs) return 'Supabase needs a short wait between sign-in emails. Try again in ' + secs[1] + ' seconds.';
++    if (/email rate limit|over_email_send_rate_limit/i.test(m)) return 'Supabase has sent as many sign-in emails as its built-in sender allows this hour. Use the last email, try again later, or set up custom SMTP in Supabase (Authentication, Emails).';
++    if (/signups? not allowed|signup_disabled/i.test(m)) return 'Sign-ups are turned off in Supabase and this email has no account yet. Turn on Allow new users to sign up (Authentication, Sign In / Providers), or add the user under Authentication, Users.';
++    if (/email.*(provider|logins?).*disabled|email_provider_disabled/i.test(m)) return 'Email sign-in is turned off in Supabase. Turn on Email under Authentication, Sign In / Providers.';
++    if (/rate|too many/i.test(m)) return 'Supabase is limiting sign-in emails. Wait a minute and try again.';
++    return this.say(e);
++  },
+@@ -4005 +4044 @@ const Cloud = {
+-      const { error } = await this.sb.from(table).upsert(list.slice(i, i + 500), { onConflict: conflict });
++      const { error } = await this.sb.from(table).upsert(list.slice(i, i + 500).map(sbSafe), { onConflict: conflict });
+@@ -4230 +4269,2 @@ function sbBoxHtml() {
+-    acct = '<p class="note">We sent a sign-in email to <b>' + esc(C.sentTo) + '</b>. Tap the link in it on this device, or type the code from it here.</p>' +
++    acct = '<p class="note">We sent a sign-in email to <b>' + esc(C.sentTo) + '</b>. Open the link in it on this device, in this browser. If the email shows a code, you can type it here instead.' +
++      (/^https?:/.test(location.protocol) ? ' If the link opens localhost or a page that can’t be reached, set the Site URL in Supabase (Authentication, URL Configuration) to this page’s address, add it under Redirect URLs, then send a new email.' : '') + '</p>' +
+@@ -4233 +4273 @@ function sbBoxHtml() {
+-    acct = '<div class="row"><input id="sb-email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com" aria-label="Email to sign in with"><button class="btn small primary" type="button" data-set="sb-send">Email me a sign-in link</button></div>' +
++    acct = '<div class="row"><input id="sb-email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com" value="' + esc(C.email || '') + '" aria-label="Email to sign in with"><button class="btn small primary" type="button" data-set="sb-send">Email me a sign-in link</button></div>' +
+@@ -4236 +4276,3 @@ function sbBoxHtml() {
+-  return urlRow + '<div class="field"><label for="sb-key">Anon or publishable key</label>' + keyBox +
++  const where = !S.standalone ? '<p class="pill warn">Inside Claude this page can’t reach Supabase. Sync works in your own copy of the page: the invoice_scraper.html file on your own site, or opened in Chrome, Edge or Safari.</p>'
++    : location.protocol === 'file:' && C.key && !C.user ? '<p class="note">This page is opened from a file, so a sign-in link can’t come back to it. Open the page from its web address to sign in with the link, or type the code from the email.</p>' : '';
++  return where + urlRow + '<div class="field"><label for="sb-key">Anon or publishable key</label>' + keyBox +
+@@ -4248 +4290,2 @@ function sbSetKey(v) {
+-  Cloud.disconnect(); Cloud.key = v; Cloud.keyEdit = false; Cloud.save(); Cloud.connect().then(() => renderSb());
++  Cloud.key = v; Cloud.keyEdit = false; Cloud.save();
++  Cloud.disconnect().then(() => Cloud.connect()).then(() => renderSb());
+@@ -4258 +4301 @@ async function sbAct(act) {
+-    const e = $('#sb-email'), email = e ? e.value.trim() : '';
++    const e = $('#sb-email'), email = e ? e.value.trim() : ''; C.email = email;
+@@ -4267 +4310 @@ async function sbAct(act) {
+-    } catch (err) { renderSb(/rate|seconds|too many/i.test(String(err && err.message)) ? 'Supabase is limiting sign-in emails. Wait a minute and try again.' : C.say(err)); }
++    } catch (err) { renderSb(C.sayAuth(err)); }
+@@ -4374 +4417 @@ $('#settings').addEventListener('change', e => {
+-    if (v !== Cloud.url) { Cloud.disconnect(); Cloud.url = v; Cloud.save(); if (Cloud.key) Cloud.connect(); renderSb('Project URL saved. Sign in again for this project.'); }
++    if (v !== Cloud.url) { Cloud.url = v; Cloud.save(); Cloud.disconnect().then(() => Cloud.key && Cloud.connect()).then(() => renderSb()); renderSb('Project URL saved. Sign in again for this project.'); }
+@@ -4464,0 +4508,3 @@ async function initCaps() {
++  // a sign-in link opened in a browser that has no key yet: the tokens stay in the address until the key is pasted
++  else if (/access_token=/.test(location.hash)) { Cloud.msg = 'To finish signing in on this browser, paste the Supabase anon or publishable key here once.'; setMob('settings'); setTimeout(() => { const k = $('#sb-key'); if (k) k.focus(); }, 60); }
++  else if (sbHashErr(location.hash)) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }
