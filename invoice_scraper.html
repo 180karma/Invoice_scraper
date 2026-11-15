@@ -3865,6 +3865,25 @@ const SB_URL = 'https://xvdxdaujllhiircrstcu.supabase.co';
 const sbTime = s => { const t = Date.parse(s || ''); return isFinite(t) ? t : 0; };
 const sbIso = s => { const t = sbTime(s); return t ? new Date(t).toISOString() : ''; };
 const nowIso = () => new Date().toISOString();
+// Postgres refuses NUL and unpaired surrogates (PDF text can carry both), and one bad row would stall the whole queue
+function sbSafe(v) {
+  if (typeof v === 'string') {
+    let s = v.indexOf('\u0000') >= 0 ? v.replace(/\u0000/g, '') : v;
+    if (!/[\ud800-\udfff]/.test(s)) return s;
+    if (typeof s.toWellFormed === 'function') return s.toWellFormed();
+    let out = '';
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c >= 0xd800 && c <= 0xdbff && (s.charCodeAt(i + 1) & 0xfc00) === 0xdc00) { out += s[i] + s[i + 1]; i++; }
+      else out += (c & 0xf800) === 0xd800 ? '\ufffd' : s[i];
+    }
+    return out;
+  }
+  if (Array.isArray(v)) return v.map(sbSafe);
+  if (v && typeof v === 'object') { const o = {}; for (const [k, x] of Object.entries(v)) o[sbSafe(k)] = sbSafe(x); return o; }
+  return v;
+}
+const sbHashErr = h => { try { return new URLSearchParams(String(h || '').replace(/^#/, '')).get('error_description') || ''; } catch (e) { return ''; } };
 // '' when the key may be used, 'secret' for a service_role or secret key, 'bad' for anything else
 function sbKeyProblem(k) {
   if (/^sb_secret_/i.test(k)) return 'secret';
@@ -3879,7 +3898,7 @@ function sbKeyProblem(k) {
 const Cloud = {
   KEY: 'invoice-scraper.supabase.v1', QKEY: 'invoice-scraper.supabase.queue.v1', MKEY: 'invoice-scraper.supabase.meta.v1',
   url: SB_URL, key: '', sb: null, user: null, state: 'off', err: '', loaded: false, applying: false,
-  sentTo: '', keyEdit: false, msg: '', dirty: {}, meta: null, tplSnap: {}, timer: 0, tries: 0, chain: Promise.resolve(), connecting: null,
+  sentTo: '', email: '', keyEdit: false, msg: '', dirty: {}, meta: null, tplSnap: {}, timer: 0, tries: 0, chain: Promise.resolve(), connecting: null,
   freshMeta() { return { uid: '', flagAt: {}, setAt: '', setSig: '', folders: {}, lc: {}, sup: {}, uploadedAt: '', pulledAt: '' }; },
   load() {
     try { const o = JSON.parse(localStorage.getItem(this.KEY) || 'null'); if (o && typeof o === 'object') { if (typeof o.url === 'string' && o.url) this.url = o.url; if (typeof o.key === 'string') this.key = o.key.trim().slice(0, 400); } } catch (e) {}
@@ -3949,12 +3968,16 @@ const Cloud = {
     if (this.sb) return Promise.resolve(true);
     if (this.connecting) return this.connecting;
     this.connecting = (async () => {
+      const linkErr = sbHashErr(location.hash);
       try {
         const lib = await this.lib();
-        this.sb = lib.createClient(this.url, this.key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit', storageKey: 'invoice-scraper.supabase-auth' } });
-        this.sb.auth.onAuthStateChange((ev, session) => { setTimeout(() => this.authed(session), 0); });
-        const r = await this.sb.auth.getSession();
-        if (/access_token|error_description/.test(location.hash)) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }
+        const sb = this.sb = lib.createClient(this.url, this.key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit', storageKey: 'invoice-scraper.supabase-auth' } });
+        // a client replaced by a new key or project URL must not sign the new one out
+        sb.auth.onAuthStateChange((ev, session) => { setTimeout(() => { if (this.sb === sb) this.authed(session); }, 0); });
+        const r = await sb.auth.getSession();
+        if (/access_token|error_description/.test(location.hash) || /#$/.test(location.href)) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }
+        if (this.sb !== sb) return false;
+        if (linkErr) this.linkFailed(linkErr);
         this.authed(r && r.data ? r.data.session : null);
         return true;
       } catch (e) { this.sb = null; this.setState(navigator.onLine ? 'error' : 'offline', this.say(e)); return false; }
@@ -3968,19 +3991,25 @@ const Cloud = {
     this.user = u;
     if (!u) { this.setState('off'); renderSb(); return; }
     if (this.meta.uid !== u.id) { const keep = { flagAt: this.meta.flagAt, setAt: this.meta.setAt, setSig: this.meta.setSig, folders: this.meta.folders }; this.meta = Object.assign(this.freshMeta(), keep, { uid: u.id }); this.saveMeta(); }
-    this.sentTo = ''; renderSb();
+    this.sentTo = ''; renderSb(/^(Key saved|To finish signing in)/.test(this.msg) ? '' : null);
     this.syncNow();
+  },
+  linkFailed(desc) {
+    const m = /expired|invalid/i.test(desc) ? 'That sign-in link has expired or was already used. Some email apps open links to check them, which uses them up. Send a new email and open the link once.'
+      : 'Supabase could not sign you in from that link: ' + hideKey(desc).slice(0, 160);
+    renderSb(m); toast(m, 'bad');
   },
   async disconnect() {
     clearTimeout(this.timer);
-    if (this.sb) { try { await this.sb.auth.signOut({ scope: 'local' }); } catch (e) {} }
-    this.sb = null; this.user = null; this.setState('off');
+    const sb = this.sb; this.sb = null; this.user = null; this.setState('off');
+    if (sb) { try { await sb.auth.signOut({ scope: 'local' }); } catch (e) {} }
   },
 
   /* ---- background work, one task at a time ---- */
   queue(task) { const p = this.chain.then(task, task); this.chain = p.catch(() => {}); return p; },
   schedule(ms) { clearTimeout(this.timer); if (!this.ready()) { renderSyncPill(); return; } this.timer = setTimeout(() => this.queue(() => this.flush()), ms); },
-  syncNow() { return this.queue(async () => { if (await this.flush()) { await this.pull(); await this.flush(); } }); },
+  // pull even when sending failed: the merge is newest-wins, so a row Supabase refuses must not keep this device empty
+  syncNow() { return this.queue(async () => { const sent = await this.flush(); if (!sent && (!this.ready() || this.state === 'offline')) return; if ((await this.pull()) && this.pending()) await this.flush(); }); },
   setState(s, err) { this.state = s; this.err = err == null ? (s === 'error' ? this.err : '') : err; renderSyncPill(); },
   isNetwork(e) { const m = String((e && (e.message || e.name)) || e || ''); return !navigator.onLine || /network|failed to fetch|load failed|fetch failed|timed? ?out/i.test(m); },
   say(e) {
@@ -3992,6 +4021,16 @@ const Cloud = {
     if (/jwt|token.*expired|not authenticated/i.test(m)) return 'The sign-in has expired. Sign in again.';
     return hideKey(m).slice(0, 200);
   },
+  // why a sign-in email was not sent, in the words of the Supabase setting to change
+  sayAuth(e) {
+    const m = String((e && e.message) || '') + ' ' + String((e && e.code) || ''), secs = m.match(/after (\d+) seconds?/i);
+    if (secs) return 'Supabase needs a short wait between sign-in emails. Try again in ' + secs[1] + ' seconds.';
+    if (/email rate limit|over_email_send_rate_limit/i.test(m)) return 'Supabase has sent as many sign-in emails as its built-in sender allows this hour. Use the last email, try again later, or set up custom SMTP in Supabase (Authentication, Emails).';
+    if (/signups? not allowed|signup_disabled/i.test(m)) return 'Sign-ups are turned off in Supabase and this email has no account yet. Turn on Allow new users to sign up (Authentication, Sign In / Providers), or add the user under Authentication, Users.';
+    if (/email.*(provider|logins?).*disabled|email_provider_disabled/i.test(m)) return 'Email sign-in is turned off in Supabase. Turn on Email under Authentication, Sign In / Providers.';
+    if (/rate|too many/i.test(m)) return 'Supabase is limiting sign-in emails. Wait a minute and try again.';
+    return this.say(e);
+  },
   fail(e) {
     const off = this.isNetwork(e);
     this.tries = Math.min(this.tries + 1, 8);
@@ -4002,7 +4041,7 @@ const Cloud = {
     const groups = {};
     for (const r of rows) { const g = Object.keys(r).join(','); (groups[g] = groups[g] || []).push(r); }
     for (const list of Object.values(groups)) for (let i = 0; i < list.length; i += 500) {
-      const { error } = await this.sb.from(table).upsert(list.slice(i, i + 500), { onConflict: conflict });
+      const { error } = await this.sb.from(table).upsert(list.slice(i, i + 500).map(sbSafe), { onConflict: conflict });
       if (error) throw error;
     }
   },
@@ -4227,13 +4266,16 @@ function sbBoxHtml() {
       '<div class="row"><button class="btn small' + (C.meta.uploadedAt ? '' : ' primary') + '" type="button" data-set="sb-upload">' + (C.meta.uploadedAt ? 'Upload everything again' : 'Upload existing data') + '</button><button class="btn small" type="button" data-set="sb-pull">Load from Supabase</button></div>' +
       '<p class="note">' + (C.meta.uploadedAt ? 'Everything in this browser was uploaded on ' + esc(niceDate(C.meta.uploadedAt.slice(0, 10))) + '. ' : 'Upload existing data copies the library, layouts, ignored items and settings already in this browser. ') + 'After that, every change is copied in the background, and this page loads the newest copy when it opens.</p>';
   } else if (C.key && C.sentTo) {
-    acct = '<p class="note">We sent a sign-in email to <b>' + esc(C.sentTo) + '</b>. Tap the link in it on this device, or type the code from it here.</p>' +
+    acct = '<p class="note">We sent a sign-in email to <b>' + esc(C.sentTo) + '</b>. Open the link in it on this device, in this browser. If the email shows a code, you can type it here instead.' +
+      (/^https?:/.test(location.protocol) ? ' If the link opens localhost or a page that can’t be reached, set the Site URL in Supabase (Authentication, URL Configuration) to this page’s address, add it under Redirect URLs, then send a new email.' : '') + '</p>' +
       '<div class="row"><input id="sb-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="Code from the email" aria-label="Code from the email"><button class="btn small primary" type="button" data-set="sb-verify">Sign in</button><button class="btn small" type="button" data-set="sb-again">Use another email</button></div>';
   } else if (C.key) {
-    acct = '<div class="row"><input id="sb-email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com" aria-label="Email to sign in with"><button class="btn small primary" type="button" data-set="sb-send">Email me a sign-in link</button></div>' +
+    acct = '<div class="row"><input id="sb-email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com" value="' + esc(C.email || '') + '" aria-label="Email to sign in with"><button class="btn small primary" type="button" data-set="sb-send">Email me a sign-in link</button></div>' +
       '<p class="note">Signing in keeps your rows private: Supabase only lets this account read and write them.</p>';
   }
-  return urlRow + '<div class="field"><label for="sb-key">Anon or publishable key</label>' + keyBox +
+  const where = !S.standalone ? '<p class="pill warn">Inside Claude this page can’t reach Supabase. Sync works in your own copy of the page: the invoice_scraper.html file on your own site, or opened in Chrome, Edge or Safari.</p>'
+    : location.protocol === 'file:' && C.key && !C.user ? '<p class="note">This page is opened from a file, so a sign-in link can’t come back to it. Open the page from its web address to sign in with the link, or type the code from the email.</p>' : '';
+  return where + urlRow + '<div class="field"><label for="sb-key">Anon or publishable key</label>' + keyBox +
     '<p class="note" id="sb-keynote">In Supabase: Project Settings, API Keys. Use the <b>anon</b> or <b>publishable</b> key, never the service_role or secret key. Once saved it is never shown again.</p></div>' + acct + msg;
 }
 function renderSb(msg) {
@@ -4245,7 +4287,8 @@ function sbSetKey(v) {
   const p = sbKeyProblem(v);
   if (p === 'secret') { renderSb('That is a secret (service_role) key. It must never be put in a web page. Paste the anon or publishable key instead.'); return false; }
   if (p) { renderSb('That does not look like a Supabase anon or publishable key.'); return false; }
-  Cloud.disconnect(); Cloud.key = v; Cloud.keyEdit = false; Cloud.save(); Cloud.connect().then(() => renderSb());
+  Cloud.key = v; Cloud.keyEdit = false; Cloud.save();
+  Cloud.disconnect().then(() => Cloud.connect()).then(() => renderSb());
   return true;
 }
 async function sbAct(act) {
@@ -4255,7 +4298,7 @@ async function sbAct(act) {
   if (act === 'sb-savekey') { const k = $('#sb-key'), v = k ? k.value.trim() : ''; if (k) k.value = ''; if (v && sbSetKey(v)) renderSb('Key saved. Now sign in with your email.'); return; }
   if (act === 'sb-forget') { await C.disconnect(); C.key = ''; C.keyEdit = false; C.sentTo = ''; C.save(); renderSb('Key removed. The data in this browser is kept.'); return; }
   if (act === 'sb-send') {
-    const e = $('#sb-email'), email = e ? e.value.trim() : '';
+    const e = $('#sb-email'), email = e ? e.value.trim() : ''; C.email = email;
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { renderSb('Type the email address to sign in with.'); return; }
     renderSb('Sending…');
     if (!(await C.connect())) { renderSb(C.err || 'Supabase could not be reached.'); return; }
@@ -4264,7 +4307,7 @@ async function sbAct(act) {
       const { error } = await C.sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true, emailRedirectTo: redirect } });
       if (error) throw error;
       C.sentTo = email; renderSb('');
-    } catch (err) { renderSb(/rate|seconds|too many/i.test(String(err && err.message)) ? 'Supabase is limiting sign-in emails. Wait a minute and try again.' : C.say(err)); }
+    } catch (err) { renderSb(C.sayAuth(err)); }
     return;
   }
   if (act === 'sb-verify') {
@@ -4371,7 +4414,7 @@ $('#settings').addEventListener('change', e => {
   if (t.id === 'sb-url') {
     const v = t.value.trim().replace(/\/+$/, '');
     if (!/^https:\/\/[\w.\-]+(:\d+)?$/.test(v)) { t.value = Cloud.url; renderSb('The project URL looks like https://your-project.supabase.co'); return; }
-    if (v !== Cloud.url) { Cloud.disconnect(); Cloud.url = v; Cloud.save(); if (Cloud.key) Cloud.connect(); renderSb('Project URL saved. Sign in again for this project.'); }
+    if (v !== Cloud.url) { Cloud.url = v; Cloud.save(); Cloud.disconnect().then(() => Cloud.key && Cloud.connect()).then(() => renderSb()); renderSb('Project URL saved. Sign in again for this project.'); }
     return;
   }
   if (t.id === 'g-remember') { Gem.remember = t.checked; Gem.save(); }
@@ -4462,6 +4505,9 @@ async function initCaps() {
   restoreMob(); applyMob(); markNav();
   Files.load().then(() => { renderStatus(); if (S.tab === 'details') renderDetails(); });
   Cloud.load(); renderSyncPill(); if (Cloud.key) Cloud.connect();
+  // a sign-in link opened in a browser that has no key yet: the tokens stay in the address until the key is pasted
+  else if (/access_token=/.test(location.hash)) { Cloud.msg = 'To finish signing in on this browser, paste the Supabase anon or publishable key here once.'; setMob('settings'); setTimeout(() => { const k = $('#sb-key'); if (k) k.focus(); }, 60); }
+  else if (sbHashErr(location.hash)) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }
   renderAll();
   initCaps();
   try { const d = await loadSample(); S.docs.push(d); S.cur = 0; await analyse(d); await showPage(); fit(); } catch (e) {}
