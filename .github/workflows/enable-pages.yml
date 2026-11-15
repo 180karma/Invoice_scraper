@@ -20,5 +20,6 @@ jobs:
             -H 'Accept: application/vnd.github+json' \
             https://api.github.com/repos/${{ github.repository }}/pages \
             -d '{"build_type":"legacy","source":{"branch":"main","path":"/"}}')
-          echo "HTTP $code"; cat out.json
+          msg=$(tr -d '\n' < out.json | cut -c1-300)
+          echo "::warning::Pages API HTTP $code $msg"
           test "$code" = 201 -o "$code" = 409
