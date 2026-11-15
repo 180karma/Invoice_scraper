@@ -200,6 +200,55 @@ textarea.csv { width: 100%; min-height: 150px; height: 190px; resize: vertical; 
 .tpl .t b { display: block; font: 600 16px/1.15 var(--font-display); letter-spacing: .02em; overflow-wrap: anywhere; }
 .tpl .t span { color: var(--muted); font-size: 12.5px; }
 .tpl.on { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.sup .supbtn { display: inline; padding: 0; border: 0; background: none; font: inherit; letter-spacing: inherit; color: inherit; text-align: left; cursor: pointer; text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; text-decoration-color: var(--accent); }
+.sup .supbtn:hover { color: var(--accent); }
+.libsheet .suplink { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; padding: 0; border: 0; background: none; font: inherit; font-weight: 500; line-height: 1.2; color: var(--accent); text-align: left; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.tpl .t .tplname { display: block; width: 100%; padding: 0; border: 0; background: none; text-align: left; font: 600 16px/1.15 var(--font-display); letter-spacing: .02em; color: var(--ink); cursor: pointer; text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 2px; overflow-wrap: anywhere; }
+.tpl .t .tplname:hover { color: var(--accent); }
+.supmodal { padding: 12px; }
+.modal.supmodal .card { width: min(640px, 100%); max-width: 640px; max-height: calc(100vh - 48px); max-height: calc(100dvh - 48px); overflow: auto; padding: 0; gap: 0; }
+.suphead { position: sticky; top: 0; z-index: 1; display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 12px 14px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.modal.supmodal h2 { margin: 0; display: block; text-transform: none; letter-spacing: .01em; font-size: 22px; line-height: 1.15; overflow-wrap: anywhere; }
+.supbody { padding: 12px 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+.supowing { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: var(--wash); }
+.supowing .k { font: 600 12px/1.2 var(--font-display); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.supowing .amt { font: 700 34px/1 var(--font-display); letter-spacing: .02em; margin-top: 2px; }
+.supowing .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.supfacts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.supfacts div { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; min-width: 0; }
+.supfacts span { display: block; font: 600 11px/1.2 var(--font-display); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.supfacts b { display: block; margin-top: 2px; font: 600 16px/1.2 var(--font-display); overflow-wrap: anywhere; }
+.suplistwrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table.suplist { width: 100%; border-collapse: collapse; font: 400 12.5px/1.3 var(--font-data); font-variant-numeric: tabular-nums; }
+.suplist th, .suplist td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; vertical-align: middle; }
+.suplist th { font: 600 11px/1.2 var(--font-display); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); background: var(--wash); position: sticky; top: 0; }
+.suplist td.num, .suplist th.num { text-align: right; }
+.suplist tr:last-child td { border-bottom: 0; }
+.suplist .link { font: 600 13px/1 var(--font-display); letter-spacing: .04em; text-transform: uppercase; min-height: 32px; padding: 4px 2px; }
+@media (max-width: 520px) {
+  .supmodal { padding: 10px 8px 18px; align-items: start; }
+  .modal.supmodal .card { max-height: calc(100dvh - 36px); }
+  .supowing .amt { font-size: 30px; }
+  .supfacts { grid-template-columns: 1fr 1fr; }
+  .supfacts div:last-child { grid-column: 1 / -1; }
+  .suphead .btn { flex: none; }
+  .suplist thead { display: none; }
+  table.suplist, .suplist tbody, .suplist tr { display: block; width: 100%; }
+  .suplist tr { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "date open" "num open" "total owing"; gap: 2px 10px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  .suplist td { display: block; border: 0; padding: 0; white-space: normal; text-align: left; }
+  .suplist td:nth-child(1) { grid-area: date; }
+  .suplist td:nth-child(2) { grid-area: num; }
+  .suplist td:nth-child(3) { grid-area: total; }
+  .suplist td:nth-child(4) { grid-area: owing; text-align: right; }
+  .suplist td:nth-child(5) { grid-area: open; }
+  .suplist td:nth-child(3)::before { content: "Total "; color: var(--muted); font: 600 11px var(--font-display); letter-spacing: .06em; text-transform: uppercase; }
+  .suplist td:nth-child(4)::before { content: "Owing "; color: var(--muted); font: 600 11px var(--font-display); letter-spacing: .06em; text-transform: uppercase; }
+}
+@media (pointer: coarse) {
+  .libsheet td:has(.suplink) { height: auto; }
+  .libsheet .suplink { min-height: 32px; display: inline-flex; align-items: center; }
+  .sup .supbtn, .tpl .t .tplname { min-height: 36px; display: inline-flex; align-items: center; }
+}
 
 .libsum { font: 500 15px/1.3 var(--font-body); } .libsum b { font: 700 22px/1 var(--font-display); letter-spacing: .02em; } .libsum span { color: var(--muted); }
 #lib-sum { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
@@ -358,6 +407,7 @@ a.contact:hover { background: var(--wash); text-decoration: underline; text-unde
 </div>
 <div class="toast" id="toast" role="status" hidden></div>
 <div class="modal" id="settings" hidden role="dialog" aria-modal="true" aria-labelledby="setTitle"></div>
+<div class="modal supmodal" id="supModal" hidden role="dialog" aria-modal="true" aria-labelledby="supTitle"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer onerror="window.__pdfFail=1"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js" defer></script>
@@ -1632,7 +1682,7 @@ const S = {
   docs: [], cur: -1, page: 0, view: { s: 1, tx: 0, ty: 0 }, tool: 'pan', sel: null, pending: null, band: null,
   tab: 'items', opts: { meta: true, clean: true, dateStyle: 'iso', scope: 'this', mdy: false },
   templates: [], caps: { downloads: null, sample: null, img: null }, standalone: !(window.claude && typeof window.claude.use === 'function'),
-  touchedOnce: false, aiCtl: null, autoTpl: true,
+  touchedOnce: false, aiCtl: null, autoTpl: true, sup: '',
   lib: { view: 'items', q: '', open: null, limit: 120, armed: false, order: { items: ['lastDate', 'desc'], records: ['date', 'desc'], invoices: ['date', 'desc'] } },
 };
 const cur = () => S.docs[S.cur] || null;
@@ -2351,6 +2401,139 @@ function logoThumb(doc) {
   if (url) doc._lt = { key, url };
   return url;
 }
+// Which saved invoices belong to one supplier: ABN when we have it, otherwise the normalised name.
+function supplierIdFn() {
+  const invs = Object.values((Lib.store && Lib.store.invoices) || {});
+  const nameAbn = {};
+  for (const i of invs) if (i.abn && i.supplier) nameAbn[Engine.norm(i.supplier)] = i.abn;
+  return (name, abn) => {
+    const a = String(abn || '').replace(/\D/g, '');
+    if (a) return a;
+    const n = Engine.norm(name);
+    return (n && nameAbn[n]) || n || 'unknown';
+  };
+}
+function supNameBtn(name, id, cls) {
+  const label = name && String(name).trim() ? String(name).trim() : 'Unknown supplier';
+  return '<button type="button" class="' + cls + '" data-sup="' + esc(id) + '" title="Details for ' + esc(label) + '">' + esc(label) + '</button>';
+}
+function itemSupId(it) {
+  const k = String(it && it.key || ''), i = k.indexOf('|');
+  return i > 0 ? k.slice(0, i) : supplierIdFn()(it && it.supplier, '');
+}
+// Saved invoices store a total only. Library.clean does not keep paid, balance or amount due.
+function payState(inv) {
+  const total = typeof inv.total === 'number' && isFinite(inv.total) ? inv.total : null;
+  const balance = typeof inv.balance === 'number' && isFinite(inv.balance) ? inv.balance : null;
+  const due = typeof inv.amount_due === 'number' && isFinite(inv.amount_due) ? inv.amount_due : null;
+  const owingField = typeof inv.owing === 'number' && isFinite(inv.owing) ? inv.owing : null;
+  const flag = typeof inv.paid === 'string' ? inv.paid.toLowerCase() : inv.paid;
+  const paid = flag === true || flag === 1 || flag === 'yes' || flag === 'paid';
+  const unpaid = flag === false || flag === 0 || flag === 'no' || flag === 'unpaid';
+  if (paid || unpaid || balance != null || due != null || owingField != null) {
+    const owing = paid ? 0 : (balance != null ? balance : (due != null ? due : (owingField != null ? owingField : total)));
+    return { total, owing, tracked: true };
+  }
+  return { total, owing: total, tracked: false };
+}
+function supplierWhen(inv) { return inv.date || String(inv.added || '').slice(0, 10); }
+function collectContacts(list, add) {
+  const seen = new Set();
+  list.forEach(raw => Engine.splitList(raw).forEach(v => { const k = add.key(v); if (!k || seen.has(k)) return; seen.add(k); add.out.push(v); }));
+}
+function renderSupplier() {
+  const id = S.sup, el = $('#supModal'); if (!el || !id) return;
+  const idOf = supplierIdFn();
+  const invs = Object.values((Lib.store && Lib.store.invoices) || {});
+  const mine = invs.filter(i => idOf(i.supplier, i.abn) === id);
+  mine.sort((a, b) => supplierWhen(b).localeCompare(supplierWhen(a)) || String(b.invoice_no || '').localeCompare(String(a.invoice_no || '')) || String(b.added || '').localeCompare(String(a.added || '')));
+  const tpls = S.templates.filter(t => idOf(t.name, t.abn) === id);
+  const doc = cur(); let docMatch = false;
+  if (doc && doc.result) {
+    const f = doc.result.fields || {}, nm = f.supplier && f.supplier.value != null ? String(f.supplier.value) : '';
+    if (nm.trim() && idOf(nm, f.abn && f.abn.value) === id) docMatch = !doc.lib || !mine.some(i => i.key === doc.libKey);
+  }
+  const name = (mine.find(i => i.supplier) || {}).supplier || (tpls.find(t => t.name) || {}).name || (id === 'unknown' ? 'Unknown supplier' : id);
+  const abn = (mine.find(i => i.abn) || {}).abn || (tpls.find(t => t.abn) || {}).abn || '';
+  const phones = [], emails = [], sites = [];
+  collectContacts(mine.map(i => i.phone).concat(tpls.map(t => t.phone)), { out: phones, key: v => Engine.phoneKey(v) });
+  collectContacts(mine.map(i => i.email).concat(tpls.map(t => t.email)), { out: emails, key: v => Engine.isEmail(v) ? v.trim().toLowerCase() : '' });
+  const seenW = new Set();
+  mine.map(i => i.website).concat(tpls.map(t => t.website)).forEach(w => {
+    const h = Engine.webHref(w || ''); if (!h || seenW.has(h)) return; seenW.add(h); sites.push(w);
+  });
+  let invoiced = 0, owing = 0, nTot = 0, tracked = false;
+  const rows = mine.map(inv => {
+    const p = payState(inv); if (p.tracked) tracked = true;
+    if (p.total != null) { invoiced += p.total; nTot++; }
+    if (p.owing != null) owing += p.owing;
+    return p;
+  });
+  invoiced = Math.round(invoiced * 100) / 100; owing = Math.round(owing * 100) / 100;
+  const aud = n => '$' + money(n);
+  const latest = mine[0];
+  const cl = contactLinks({ phone: phones.join(', '), email: emails.join(', ') });
+  sites.forEach(w => { const h = webLink(w); if (h) cl.push(h); });
+  const amt = !mine.length ? aud(0) : (nTot ? aud(tracked ? owing : invoiced) : '—');
+  let owingHtml;
+  if (tracked) {
+    owingHtml = '<div class="supowing"><div class="pair"><div><div class="k">Amount owing</div><div class="amt">' + esc(nTot ? aud(owing) : '—') + '</div></div><div><div class="k">Total invoiced</div><div class="amt">' + esc(nTot ? aud(invoiced) : '—') + '</div></div></div>' +
+      '<p class="note">Owing leaves out invoices marked paid' + (mine.some(i => typeof i.balance === 'number' || typeof i.amount_due === 'number' || typeof i.owing === 'number') ? ' and uses a stored balance where there is one' : '') + '.</p></div>';
+  } else {
+    owingHtml = '<div class="supowing"><div class="k">Total invoiced</div><div class="amt">' + esc(amt) + '</div>' +
+      '<p class="note">' + (mine.length ? 'No invoice is marked paid, so this is the amount owing.' : 'Nothing from this supplier is saved in the library yet.') + '</p></div>';
+  }
+  const miss = mine.length - nTot;
+  let h = '<div class="card"><div class="suphead"><h2 id="supTitle">' + esc(name) + '</h2><button class="btn" type="button" data-sup-close>Close</button></div><div class="supbody">' + owingHtml +
+    '<div class="supfacts"><div><span>Invoices</span><b>' + mine.length + '</b></div><div><span>Latest invoice</span><b>' + (latest ? esc(niceDate(supplierWhen(latest))) : '—') + '</b></div><div><span>Latest number</span><b>' + (latest && latest.invoice_no ? esc(latest.invoice_no) : '—') + '</b></div></div>' +
+    (abn ? '<p class="note">ABN ' + esc(fmtAbn(abn)) + '</p>' : '') +
+    (cl.length ? '<div class="contacts big" aria-label="Supplier contact details">' + cl.join('') + '</div>' : '<p class="note">No phone, email or website is stored for this supplier.</p>') +
+    (docMatch ? '<p class="note">The invoice open now is not in the library, so it is not included in this total.</p>' : '') +
+    (miss ? '<p class="note">' + miss + ' saved invoice' + (miss === 1 ? ' has' : 's have') + ' no total stored, so ' + (miss === 1 ? 'it is' : 'they are') + ' not in the sum.</p>' : '') +
+    '<h3 class="sec">Invoices</h3>';
+  if (!mine.length) h += '<p class="empty">No saved invoices for this supplier.</p>';
+  else {
+    h += '<div class="suplistwrap"><table class="suplist"><thead><tr><th>Date</th><th>Number</th><th class="num">Total</th><th class="num">Owing</th><th></th></tr></thead><tbody>' +
+      mine.map((inv, n) => {
+        const p = rows[n];
+        const show = v => v == null ? '—' : money(v);
+        return '<tr><td>' + esc(niceDate(supplierWhen(inv))) + '</td><td>' + esc(inv.invoice_no || '—') + '</td><td class="num">' + show(p.total) + '</td><td class="num">' + show(p.owing) + '</td><td><button type="button" class="link" data-open-inv="' + esc(inv.key) + '">Open</button></td></tr>';
+      }).join('') + '</tbody></table></div>' +
+      (tracked ? '' : '<p class="note">Owing equals the invoice total until an invoice can be marked paid.</p>');
+  }
+  h += '</div></div>';
+  el.innerHTML = h;
+}
+function openSupplier(id) {
+  if (!id) return;
+  S.sup = id; S.supFrom = document.activeElement;
+  renderSupplier();
+  const m = $('#supModal'); m.hidden = false;
+  const c = m.querySelector('[data-sup-close]'); if (c) c.focus();
+}
+function closeSupplier() {
+  const m = $('#supModal'); if (!m || m.hidden) return;
+  m.hidden = true; S.sup = '';
+  const back = S.supFrom; S.supFrom = null;
+  if (back && back.isConnected && typeof back.focus === 'function') back.focus();
+}
+function openSavedInvoice(key) {
+  closeSupplier();
+  const idx = S.docs.findIndex(d => d.libKey === key);
+  if (idx >= 0) {
+    S.cur = idx; S.page = 0; S.sel = null; S.pending = null; S.tab = 'items';
+    showPage().then(() => fit()); renderAll(); return;
+  }
+  S.tab = 'library'; S.lib.view = 'invoices'; S.lib.open = key;
+  if (S.lib.q) S.lib.q = '';
+  const n = Object.keys((Lib.store && Lib.store.invoices) || {}).length;
+  if (S.lib.limit < n) S.lib.limit = n;
+  renderTabs(); renderLibrary();
+  requestAnimationFrame(() => {
+    const tr = document.querySelector('#lib-body tr[data-inv="' + (window.CSS && CSS.escape ? CSS.escape(key) : key) + '"]');
+    if (tr) tr.scrollIntoView({ block: 'center' });
+  });
+}
 function renderStatus() {
   const doc = cur(), el = $('#status');
   if (!doc) { el.innerHTML = '<div class="who"><div class="whoText"><div class="sup">No invoice open</div><div class="meta">Open a PDF or a photo of an invoice to start.</div></div></div>'; return; }
@@ -2399,7 +2582,10 @@ function renderStatus() {
   }
   if (doc.aiError) ps.push(pill('bad', esc(doc.aiError) + (doc.aiErrSet ? ' <button class="link" type="button" data-act="settings">Open settings</button>' : '')));
   const cl = contactLinks(fieldContacts(f));
-  el.innerHTML = '<div class="who">' + (lt ? '<img src="' + lt + '" alt="Supplier logo">' : '') + '<div class="whoText"><div class="sup">' + (f.supplier ? esc(f.supplier.value) : '<span class="unk">Supplier not found yet</span>') + '</div><div class="meta">' + bits.join(' · ') + '</div>' +
+  const supIdOf = supplierIdFn();
+  const supName = f.supplier && f.supplier.value != null ? String(f.supplier.value).trim() : '';
+  const supHtml = supName ? supNameBtn(supName, supIdOf(supName, f.abn && f.abn.value), 'supbtn') : '<span class="unk">Supplier not found yet</span>';
+  el.innerHTML = '<div class="who">' + (lt ? '<img src="' + lt + '" alt="Supplier logo">' : '') + '<div class="whoText"><div class="sup">' + supHtml + '</div><div class="meta">' + bits.join(' · ') + '</div>' +
     (cl.length ? '<div class="contacts" aria-label="Supplier contact details">' + cl.join('') + '</div>' : '') + '</div></div><div class="pills">' + ps.join('') + '</div>';
 }
 function renderItems() {
@@ -2509,7 +2695,7 @@ function renderSuppliers() {
   for (const t of S.templates) {
     const on = doc && doc.tplId === t.id;
     h += '<div class="tpl' + (on ? ' on' : '') + '">' + (t.logo && t.logo.thumb ? '<img src="' + esc(t.logo.thumb) + '" alt="">' : '<span class="noimg">NO LOGO</span>') +
-      '<div class="t"><b>' + esc(t.name) + '</b><span>' + (t.abn ? 'ABN ' + esc(fmtAbn(t.abn)) + ' · ' : '') + t.zones.length + ' box' + (t.zones.length === 1 ? '' : 'es') + (t.auto ? ' · saved automatically' : '') + (on ? ' · in use' : '') + '</span>' +
+      '<div class="t">' + supNameBtn(t.name, supplierIdFn()(t.name, t.abn), 'tplname') + '<span>' + (t.abn ? 'ABN ' + esc(fmtAbn(t.abn)) + ' · ' : '') + t.zones.length + ' box' + (t.zones.length === 1 ? '' : 'es') + (t.auto ? ' · saved automatically' : '') + (on ? ' · in use' : '') + '</span>' +
       (contactLinks(t, true).length ? '<div class="contacts">' + contactLinks(t, true).join('') + '</div>' : '') + '</div>' +
       (doc && !on ? '<button class="btn small" type="button" data-apply="' + esc(t.id) + '">Apply</button>' : '') +
       '<button class="iconbtn" type="button" data-del="' + esc(t.id) + '" aria-label="Delete the layout for ' + esc(t.name) + '">' + IC.bin.replace('<svg', '<svg width="18" height="18"') + '</button></div>';
@@ -2533,6 +2719,7 @@ function renderAll() { renderDocSel(); renderStatus(); renderTabs(); renderTab()
 $('#panel').addEventListener('click', async e => {
   if (e.target.closest('a[href]')) return;                                       // tel:, mailto: and web links open on their own
   const b = e.target.closest('button');
+  if (b && b.dataset.sup) { openSupplier(b.dataset.sup); return; }
   if (b && b.dataset.libSort) {
     const view = S.lib.view, k = b.dataset.libSort, cur = S.lib.order[view] || ['', 'desc'];
     S.lib.order[view] = cur[0] === k ? [k, cur[1] === 'asc' ? 'desc' : 'asc'] : [k, b.dataset.libDir === 'desc' ? 'desc' : 'asc'];
@@ -2937,7 +3124,7 @@ function libItemRows(it, n, nCols) {
     '<td class="rn"><button type="button" class="sheet-exp" data-item="' + esc(it.key) + '" aria-expanded="' + open + '" title="' + (open ? 'Hide price history' : 'Show price history') + '">' + (open ? '▾ ' : '▸ ') + n + '</button></td>' +
     '<td>' + (it.item_no ? '<span class="code">' + esc(it.item_no) + '</span>' : '') + '</td>' +
     '<td class="clip" title="' + esc(it.description || '') + '">' + esc(it.description || 'No description') + '</td>' +
-    '<td class="clip" title="' + esc(it.supplier || '') + '">' + esc(it.supplier || 'Unknown supplier') + '</td>' +
+    '<td class="clip" title="' + esc(it.supplier || '') + '">' + supNameBtn(it.supplier, itemSupId(it), 'suplink') + '</td>' +
     '<td class="num">' + esc(fmtQty(it.qty)) + '</td>' +
     '<td>' + esc(uom) + '</td>' +
     '<td class="num">' + (it.lastPrice != null ? priceHtml(it.lastPrice, it.lastUom || it.uom) : '') + '</td>' +
@@ -2955,7 +3142,7 @@ function libInvRows(i, n, nCols) {
   let h = '<tr class="' + (open ? 'open' : '') + '" data-inv="' + esc(i.key) + '">' +
     '<td class="rn"><button type="button" class="sheet-exp" data-inv="' + esc(i.key) + '" aria-expanded="' + open + '" title="' + (open ? 'Hide purchased items' : 'Show purchased items') + '">' + (open ? '▾ ' : '▸ ') + n + '</button></td>' +
     '<td>' + esc(niceDate(i.date || String(i.added).slice(0, 10))) + '</td>' +
-    '<td class="clip" title="' + esc(i.supplier || '') + '">' + esc(i.supplier || 'Unknown supplier') + '</td><td>' + esc(i.invoice_no || '') + '</td>' +
+    '<td class="clip" title="' + esc(i.supplier || '') + '">' + supNameBtn(i.supplier, supplierIdFn()(i.supplier, i.abn), 'suplink') + '</td><td>' + esc(i.invoice_no || '') + '</td>' +
     '<td class="num">' + i.lines.length + '</td><td class="num">' + (i.total != null ? money(i.total) : '') + '</td><td>' + (i.src === 'gemini' ? 'Gemini' : i.src === 'claude' ? 'Claude' : 'Text') + '</td>' +
     '<td class="clip">' + Engine.splitList(i.phone).map(telLink).join(' ') + '</td><td class="clip">' + Engine.splitList(i.email).map(mailLink).join(' ') + '</td>' +
     '<td class="clip" title="' + esc(i.file || '') + '">' + esc(i.file || '') + '</td>' +
@@ -3006,7 +3193,8 @@ function renderLibrary() {
     const recs = a.records.filter(r => has((r.item_no || '') + ' ' + (r.description || '') + ' ' + r.supplier + ' ' + r.invoice_no));
     libOrder(recs, 'records');
     const cell = (r, k) => { const v = r[k]; const inner = k === 'unit_price' ? priceHtml(v, r.uom) : esc(v == null ? '' : k === 'quantity' || k === 'weight' ? fmtQty(v) : num(k) && typeof v === 'number' ? v.toFixed(2) : v); return '<td class="' + (num(k) ? 'num' : k === 'description' ? 'clip' : '') + '"' + (k === 'description' && v ? ' title="' + esc(v) + '"' : '') + '>' + inner + '</td>'; };
-    h = recs.length ? '<table class="libsheet">' + libHead(cols, 'records') + '<tbody>' + recs.slice(0, L.limit).map((r, i) => '<tr><td class="rn">' + (i + 1) + '</td><td>' + esc(niceDate(r.date)) + '</td><td class="clip" title="' + esc(r.supplier) + '">' + esc(r.supplier) + '</td><td>' + esc(r.invoice_no) + '</td>' + F.map(f => cell(r, f.key)).join('') + '</tr>').join('') + '</tbody></table>' + more(recs.length) : none;
+    const idOf = supplierIdFn(), invBy = Lib.store.invoices || {};
+    h = recs.length ? '<table class="libsheet">' + libHead(cols, 'records') + '<tbody>' + recs.slice(0, L.limit).map((r, i) => '<tr><td class="rn">' + (i + 1) + '</td><td>' + esc(niceDate(r.date)) + '</td><td class="clip" title="' + esc(r.supplier || '') + '">' + supNameBtn(r.supplier, idOf(r.supplier, (invBy[r.inv] || {}).abn), 'suplink') + '</td><td>' + esc(r.invoice_no) + '</td>' + F.map(f => cell(r, f.key)).join('') + '</tr>').join('') + '</tbody></table>' + more(recs.length) : none;
   } else {
     const cols = [
       { key: '', label: '#', cls: 'rn' }, { key: 'date', label: 'Date', dir: 'desc' }, { key: 'supplier', label: 'Supplier' }, { key: 'invoice_no', label: 'Invoice' },
@@ -3599,6 +3787,14 @@ $('#openBtn').addEventListener('click', async () => {
 });
 $('#setBtn').addEventListener('click', () => openSettings());
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#settings').hidden) { e.stopImmediatePropagation(); closeSettings(); $('#setBtn').focus(); } }, true);
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#supModal').hidden) { e.preventDefault(); e.stopImmediatePropagation(); closeSupplier(); } }, true);
+$('#supModal').addEventListener('click', e => {
+  if (e.target.closest('a[href]')) return;
+  if (e.target === $('#supModal')) { closeSupplier(); return; }
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.hasAttribute('data-sup-close')) { closeSupplier(); return; }
+  if (b.dataset.openInv) openSavedInvoice(b.dataset.openInv);
+});
 $('#file').addEventListener('change', e => { const fs = Array.from(e.target.files || []); e.target.value = ''; addFiles(fs); });
 $('#docSel').addEventListener('change', async e => { S.cur = +e.target.value; S.page = 0; S.sel = null; S.pending = null; await showPage(); fit(); renderAll(); });
 $('#docClose').addEventListener('click', async () => { if (!S.docs.length) return; flushSync(); const d = S.docs.splice(S.cur, 1)[0]; d.pages.forEach(p => { if (p.canvas && p._pdf) p.canvas.width = 0; }); S.cur = Math.min(S.cur, S.docs.length - 1); S.page = 0; S.sel = null; S.pending = null; await showPage(); fit(); renderAll(); });
