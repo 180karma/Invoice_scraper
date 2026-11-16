@@ -3947,6 +3947,8 @@ function restoreMob() {
 const SB_LIB = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0/dist/umd/supabase.js';
 const SB_SRI = 'sha384-uteMfOloLDGt042uDz+xHGF3ym63/WQ6rFq7murQRG8Ih7QrXGEGNtWd8688sb4O';
 const SB_URL = 'https://xvdxdaujllhiircrstcu.supabase.co';
+// the kitchen project's anon key: public by design (row-level security guards the data), so any copy of the page syncs
+const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh2ZHhkYXVqbGxoaWlyY3JzdGN1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ3MDk2OTgsImV4cCI6MjExMDI4NTY5OH0.A3iXyv7o2uGbIpGxfTSPUrl7nS_U81RShDoIKhG6yJY';
 const sbTime = s => { const t = Date.parse(s || ''); return isFinite(t) ? t : 0; };
 const sbIso = s => { const t = sbTime(s); return t ? new Date(t).toISOString() : ''; };
 const nowIso = () => new Date().toISOString();
@@ -3985,7 +3987,8 @@ const SB_ENV = (() => {
   const c = window.INVOICE_SCRAPER_CONFIG && typeof window.INVOICE_SCRAPER_CONFIG === 'object' ? window.INVOICE_SCRAPER_CONFIG : {};
   const url = typeof c.supabaseUrl === 'string' ? c.supabaseUrl.trim().replace(/\/+$/, '') : '';
   const key = typeof c.supabaseAnonKey === 'string' ? c.supabaseAnonKey.trim() : '';
-  return { url: /^https?:\/\/[\w.\-]+(:\d+)?$/.test(url) ? url : '', key: key && !sbKeyProblem(key) ? key.slice(0, 400) : '' };
+  const u = /^https?:\/\/[\w.\-]+(:\d+)?$/.test(url) ? url : '';
+  return { url: u, key: key && !sbKeyProblem(key) ? key.slice(0, 400) : (!u || u === SB_URL ? SB_ANON : '') };
 })();
 const SB_HOME = SB_ENV.url || SB_URL;
 const Cloud = {
@@ -4059,6 +4062,8 @@ const Cloud = {
   },
   // the site's key belongs to the site's project, so it is not used with a project URL typed in Settings
   pick() {
+    // the built-in project always wins, so an old key or URL saved in this browser can't stop the automatic sync
+    if (SB_ENV.key) { this.ownUrl = ''; this.ownKey = ''; }
     this.url = this.ownUrl || SB_HOME;
     const envKey = this.url === SB_HOME ? SB_ENV.key : '';
     this.key = this.ownKey || envKey; this.keyFrom = this.ownKey ? 'own' : envKey ? 'env' : '';
@@ -4168,7 +4173,9 @@ const Cloud = {
       if (this.user !== u) return false;
       if (!ok) this.setState('off');
       renderSb(); renderAll();
-      if (ok) this.syncNow();
+      // the first sign-in on a browser that already holds data sends all of it up without being asked
+      if (ok && !this.meta.uploadedAt && (Object.keys(Lib.store.invoices).length || S.templates.length)) this.uploadAll().then(() => this.syncNow());
+      else if (ok) this.syncNow();
       return ok;
     }, e => { this.fail(e); renderSb(); return false; });
   },
@@ -4463,6 +4470,7 @@ function sbBoxHtml() {
   }
   const where = !S.standalone ? '<p class="pill warn">Inside Claude this page can’t reach Supabase. Sync works in your own copy of the page: the invoice_scraper.html file on your own site, or opened in Chrome, Edge or Safari.</p>'
     : location.protocol === 'file:' && C.key && !C.user ? '<p class="note">This page is opened from a file, so a sign-in link can’t come back to it. Open the page from its web address to sign in with the link, or type the code from the email.</p>' : '';
+  if (C.keyFrom === 'env') return where + acct + msg;
   return where + urlRow + '<div class="field"><label for="sb-key">Anon or publishable key</label>' + keyBox +
     '<p class="note" id="sb-keynote">' + (C.keyFrom === 'env' && !C.keyEdit ? 'This site was published with its Supabase key, so there is nothing to paste. ' : '') + 'In Supabase: Project Settings, API Keys. Use the <b>anon</b> or <b>publishable</b> key, never the service_role or secret key. Once saved it is never shown again.</p></div>' + acct + msg;
 }
@@ -4674,7 +4682,7 @@ function renderSettings(msg) {
   $('#settings').innerHTML = '<div class="card"><h2 id="setTitle">Settings<button class="iconbtn" type="button" data-set="close" aria-label="Close settings">&times;</button></h2>' +
     (S.setNote ? '<p class="pill warn">' + esc(S.setNote) + '</p>' : '') +
     '<h3 class="sec">Supabase copy</h3>' +
-    '<p class="note">Everything stays in this browser and works offline. With a key and a sign-in, each change is also copied to your Supabase project, and other devices load it from there.</p>' +
+    '<p class="note">' + (Cloud.keyFrom === 'env' ? 'Every change is saved to Supabase automatically while you are signed in, and other devices load it from there. It also keeps working offline and catches up when the connection is back.' : 'Everything stays in this browser and works offline. With a key and a sign-in, each change is also copied to your Supabase project, and other devices load it from there.') + '</p>' +
     '<div id="sb-box">' + sbBoxHtml() + '</div>' +
     (Cloud.isAdmin() ? '<h3 class="sec">Staff</h3><div id="staff-box">' + staffBoxHtml() + '</div>' : '') +
     '<h3 class="sec">Invoice folder</h3>' + folder +
