@@ -998,6 +998,16 @@ const Engine = (() => {
   /* ---------- invoice-level fields from page text ---------- */
   const GENERIC_RE = /^(tax\s+invoice|invoice|statement|credit\s+note|adjustment\s+note|delivery\s+docket|page\b|date\b|bill\s+to|ship|sold\s+to|deliver|customer|abn|a\.b\.n|phone|ph\b|tel|fax|email|www|http|po\s+box|original|copy|duplicate)/i;
   const COMPANY_RE = /\b(pty\.?\s*ltd\.?|p\/l|limited|ltd\.?|inc\.?|llc|distributors?|wholesale(rs)?|foods?|supplies|supply|trading|group|co\.|company|enterprises|services|industries|imports?|produce|meats?|seafoods?|bakery|dairy|beverages?)\b/i;
+  // "c/- Pearl Coast", "c/o Pearl Coast" and "care of Pearl Coast" name whoever the letter is sent via, not the issuer
+  function isCareOf(text) {
+    return /^(?:c\s*\/\s*-\s*|c\s*\/\s*o\b|care\s+of\b)/i.test(String(text || '').trim());
+  }
+  const ADDRESS_RE = /^(?:p\.?\s*o\.?\s*box|po\s+box|locked\s+bag|private\s+bag|gpo\s+box|\d+\s|unit\s+\d|suite\s|level\s|shop\s)/i;
+  const PLACE_RE = /\b(?:australia|new\s+south\s+wales|victoria|queensland|western\s+australia|south\s+australia|tasmania|nsw|vic|qld|wa|sa|tas|nt|act)\b/i;
+  function issuerLine(text) {
+    const t = String(text || '').trim();
+    return !!(t && !GENERIC_RE.test(t) && !isCareOf(t) && !/\d{4,}/.test(t) && /[A-Za-z]{2}/.test(t));
+  }
 
   function findABNs(page) {
     const out = [];
@@ -1010,28 +1020,43 @@ const Engine = (() => {
   function findSupplier(page) {
     const segs = page.lines.flatMap(L => L.segs);
     const abns = findABNs(page);
+    let careOnly = false;
     if (abns.length) {
-      // walk up the address block the ABN belongs to; its first line is the trading name
+      // walk up the address block the ABN belongs to. Its trading name is the first real line.
+      // A "c/-" or "care of" line is not that name, and a much larger line above the block is the letterhead.
       const a = abns[0];
-      let cur = segs.find(s => s.words.includes(a.words[0])) || null;
+      let cur = segs.find(s => a.words.length && s.words.includes(a.words[0])) || null;
       if (cur) {
-        let x0 = cur.x0, x1 = cur.x1, top = cur, pitch = cur.h * 1.25;
+        let x0 = cur.x0, x1 = cur.x1, pitch = cur.h * 1.25;
         const above = segs.filter(s => s.base < cur.base - 1).sort((p, q) => q.base - p.base);
         let lastBase = cur.base;
+        const block = [];
         for (const s of above) {
-          if (lastBase - s.base > 2.6 * pitch) break;
+          const gap = lastBase - s.base, wordmark = s.h > cur.h * 1.4 && issuerLine(s.text);
+          if (gap > (wordmark ? 6 * pitch : 2.6 * pitch)) break;
           if (Math.min(s.x1, x1 + 6) - Math.max(s.x0, x0 - 6) <= 0) continue;
-          if (Math.abs(s.h - cur.h) > 0.45 * cur.h && lastBase - s.base > 1.6 * pitch) break;
-          top = s; lastBase = s.base; x0 = Math.min(x0, s.x0); x1 = Math.max(x1, s.x1);
+          if (!wordmark && Math.abs(s.h - cur.h) > 0.45 * cur.h && gap > 1.6 * pitch) break;
+          block.push(s); lastBase = s.base;
+          if (!wordmark) { x0 = Math.min(x0, s.x0); x1 = Math.max(x1, s.x1); }
+          if (wordmark) break;
         }
-        if (top !== cur && !GENERIC_RE.test(top.text) && !/\d{4,}/.test(top.text)) return { value: top.text, words: top.words, how: 'ABN block' };
+        const care = block.some(s => isCareOf(s.text));
+        let pool = block.filter(s => issuerLine(s.text));
+        if (care) pool = pool.filter(s => !ADDRESS_RE.test(s.text.trim()) && !PLACE_RE.test(s.text.trim()));
+        if (pool.length) {
+          const mark = pool.filter(s => s.h > cur.h * 1.4).sort((p, q) => q.h - p.h || p.base - q.base)[0];
+          const top = mark || pool[pool.length - 1];
+          return { value: top.text.trim(), words: top.words, how: 'ABN block' };
+        }
+        if (care) careOnly = true;
       }
     }
-    const topSegs = segs.filter(s => s.base < page.h * 0.4 && !GENERIC_RE.test(s.text) && /[A-Za-z]{3}/.test(s.text));
+    const topSegs = segs.filter(s => s.base < page.h * 0.4 && issuerLine(s.text) && /[A-Za-z]{3}/.test(s.text));
     const co = topSegs.find(s => COMPANY_RE.test(s.text) && s.text.length < 60);
-    if (co) return { value: co.text, words: co.words, how: 'company name' };
+    if (co) return { value: co.text.trim(), words: co.words, how: 'company name' };
+    if (careOnly) return null;
     const big = topSegs.filter(s => !/\d{3,}/.test(s.text) && s.text.length >= 3 && s.text.length < 50).sort((p, q) => q.h - p.h || p.base - q.base)[0];
-    if (big) return { value: big.text, words: big.words, how: 'top of page' };
+    if (big) return { value: big.text.trim(), words: big.words, how: 'top of page' };
     return null;
   }
   function findInvoiceNo(page) {
@@ -1371,7 +1396,10 @@ const Engine = (() => {
       const text = zoneText(page, z.rect).trim();
       if (!text) { if (z.type === 'custom') res.custom.push({ label: z.label || 'Field', value: '', zoneId: z.id }); continue; }
       const flat = text.replace(/\s*\n\s*/g, ' ');
-      if (z.type === 'supplier') setF('supplier', text.split('\n')[0].trim(), 'zone', { zoneId: z.id });
+      if (z.type === 'supplier') {
+        const line = text.split('\n').map(s => s.trim()).find(s => s && !isCareOf(s));
+        if (line) setF('supplier', line, 'zone', { zoneId: z.id });
+      }
       else if (z.type === 'invoice_no') {
         const m = /(?:no|num|number|#|id|invoice)\.?\s*[:#]?\s*([A-Z0-9][\w\-\/]*\d[\w\-\/]*)\s*$/i.exec(flat);
         const tok = flat.split(/\s+/).filter(t => /\d/.test(t));
@@ -1501,13 +1529,18 @@ const Engine = (() => {
     const t = p0.hasText ? findTable(p0) : null;
     let sig = '';
     if (t) { const tb = extractTable(p0, t.rect); sig = tb.columns.map(c => c.key || norm(c.name)).join('|'); }
-    return { abns: findABNs(p0).map(a => a.value), text: norm(p0.lines.map(L => L.text).join(' ')), headerSig: sig, hasText: p0.hasText };
+    const lines = p0.lines.map(L => L.text);
+    return { abns: findABNs(p0).map(a => a.value), text: norm(lines.join(' ')), nameText: norm(lines.filter(s => !isCareOf(s)).join(' ')), headerSig: sig, hasText: p0.hasText };
   }
   function scoreTemplate(fp, tpl, logoSim) {
     let score = 0; const why = [];
-    if (tpl.abn && fp.abns.includes(tpl.abn)) { score += 100; why.push('ABN'); }
+    const tplAbn = String(tpl.abn || '').replace(/\D/g, '');
+    const pageAbns = fp.abns || [];
+    if (tplAbn && pageAbns.length && !pageAbns.includes(tplAbn)) return { score: 0, why };
+    if (tplAbn && pageAbns.includes(tplAbn)) { score += 100; why.push('ABN'); }
     const nm = norm(tpl.name || '');
-    if (nm.length >= 4 && fp.text.includes(nm)) { score += 60; why.push('name'); }
+    const nameText = fp.nameText != null ? fp.nameText : fp.text;
+    if (nm.length >= 4 && !isCareOf(tpl.name) && nameText.includes(nm)) { score += 60; why.push('name'); }
     if (logoSim != null && logoSim >= 0.92) { score += 55; why.push('logo'); }
     if (tpl.headerSig && tpl.headerSig === fp.headerSig && fp.headerSig) { score += 15; why.push('table layout'); }
     return { score, why };
@@ -1553,7 +1586,7 @@ const Engine = (() => {
 
   return { FIELDS, FIELD_BY_KEY, UOM_VOCAB, norm, isNum, toNum, prepPage, buildLines, wordsIn, mapHeader, extractTable, detect, extract,
     fingerprint, scoreTemplate, buildCSV, parseDate, fmtDate, zoneText, findTable, colId, checkAmounts, docType,
-    csvCell, guard, zoneSpec, placeZones, fitTable, anchorFor, snapZone, findContacts, telHref, webHref, isEmail, splitList, phoneKey };
+    csvCell, guard, zoneSpec, placeZones, fitTable, anchorFor, snapZone, findContacts, telHref, webHref, isEmail, splitList, phoneKey, isCareOf, findSupplier };
 })();
 
 /* ===================================================================
@@ -2175,6 +2208,27 @@ async function analyse(doc) {
 function recheckDocs() {
   for (const d of S.docs) { if (d.tplId || d.touched || !d.fp) continue; const hit = matchTemplate(d); if (hit) { applyTemplate(d, hit.tpl, hit.why); run(d); } }
 }
+// the name already on file for this ABN: the saved layout, or the earliest invoice that is not a care-of line
+function knownIssuerName(abn) {
+  const a = String(abn || '').replace(/\D/g, '');
+  if (a.length !== 11) return '';
+  const ok = s => s && String(s).trim() && !Engine.isCareOf(s);
+  const tpl = S.templates.find(t => String(t.abn || '').replace(/\D/g, '') === a && ok(t.name));
+  if (tpl) return String(tpl.name).trim();
+  const invs = Object.values((Lib.store && Lib.store.invoices) || {}).filter(i => String(i.abn || '').replace(/\D/g, '') === a && ok(i.supplier));
+  invs.sort((p, q) => supplierWhen(p).localeCompare(supplierWhen(q)) || String(p.added || '').localeCompare(String(q.added || '')));
+  return invs.length ? String(invs[0].supplier).trim() : '';
+}
+// a care-of line is never the supplier. An ABN already in the library keeps that supplier's name,
+// so a HOST invoice is not renamed from a "c/- Pearl Coast" line, and Pearl Coast is left as Pearl Coast.
+function adoptKnownSupplier(res) {
+  const f = res && res.fields; if (!f) return;
+  if (f.supplier && Engine.isCareOf(f.supplier.value)) delete f.supplier;
+  const known = knownIssuerName(f.abn && f.abn.value);
+  if (!known) return;
+  const name = f.supplier && f.supplier.value != null ? String(f.supplier.value).trim() : '';
+  if (!name || Engine.norm(name) !== Engine.norm(known)) f.supplier = { value: known, src: 'layout' };
+}
 function run(doc) {
   let res;
   if (doc.mode === 'ai' && doc.ai) {
@@ -2195,9 +2249,10 @@ function run(doc) {
     if (!res.fields.website && ct.website) res.fields.website = { value: ct.website, src: 'auto' };
   }
   if (tpl) {
-    if (!res.fields.supplier && tpl.name) res.fields.supplier = { value: tpl.name, src: 'layout' }; if (!res.fields.abn && tpl.abn) res.fields.abn = { value: tpl.abn, src: 'layout' };
+    if (!res.fields.supplier && tpl.name && !Engine.isCareOf(tpl.name)) res.fields.supplier = { value: tpl.name, src: 'layout' }; if (!res.fields.abn && tpl.abn) res.fields.abn = { value: tpl.abn, src: 'layout' };
     for (const k of ['phone', 'email', 'website']) if (!res.fields[k] && tpl[k]) res.fields[k] = { value: tpl[k], src: 'layout' };
   }
+  adoptKnownSupplier(res);
   if (doc.pages[0] && !doc.pages[0].hasText && doc.mode !== 'ai') res.docType = doc.pages[0].garbled ? 'Unreadable text' : 'Scanned page';
   for (const [k, v] of Object.entries(doc.manual)) {
     if (v === '' || v == null) continue;
@@ -3561,7 +3616,7 @@ async function flushAutoTpl() {
 }
 
 /* ================= reading scans with Claude ================= */
-const AI_PROMPT = 'You are reading a supplier invoice from images, to turn it into spreadsheet rows.\n\nReply with only one JSON object, no prose, in exactly this shape:\n{"supplier": string or null, "abn": string or null, "invoice_no": string or null, "date": "YYYY-MM-DD" or null, "due_date": "YYYY-MM-DD" or null, "phone": [string], "email": [string], "website": string or null, "totals": [{"label": string, "value": number}], "columns": [string], "rows": [[string]], "boxes": {"table": [left, top, right, bottom] or null, "supplier": [..] or null, "logo": [..] or null, "invoice_no": [..] or null, "date": [..] or null, "total": [..] or null}}\n\n"supplier" is the business that issued the invoice (read the logo if the name is only there), not the customer it is billed to.\n"phone", "email" and "website" are the issuer\'s own contact details as printed (not the customer\'s, and not a fax number); use [] or null when none are printed.\n"totals" are the summary lines printed under the line items (subtotal, discount, GST, total), in order.\n"columns" are the headings of the line-item table exactly as printed, left to right.\n"rows" has one array per line item with one string per column, in the same order as "columns".\n"boxes" says where each thing is on image 1: four numbers from 0 to 1, as fractions of that image, measured from its top-left corner, in the order left, top, right, bottom. "table" covers the heading row and every line-item row but not the totals; "supplier" is the printed name; "invoice_no", "date" and "total" cover just the value. Use null for anything that is not on image 1.\n\nRules: copy every value exactly as printed and never calculate or correct one. Join a wrapped description into one cell. Use "" for a cell the invoice leaves blank. Do not put subtotal or total lines in "rows". Dates are day-first unless the month is written as a word. If something cannot be read, use null or "" and do not guess.\n';
+const AI_PROMPT = 'You are reading a supplier invoice from images, to turn it into spreadsheet rows.\n\nReply with only one JSON object, no prose, in exactly this shape:\n{"supplier": string or null, "abn": string or null, "invoice_no": string or null, "date": "YYYY-MM-DD" or null, "due_date": "YYYY-MM-DD" or null, "phone": [string], "email": [string], "website": string or null, "totals": [{"label": string, "value": number}], "columns": [string], "rows": [[string]], "boxes": {"table": [left, top, right, bottom] or null, "supplier": [..] or null, "logo": [..] or null, "invoice_no": [..] or null, "date": [..] or null, "total": [..] or null}}\n\n"supplier" is the business that issued the invoice (read the logo if the name is only there), not the customer it is billed to, and not a line that starts with "c/-", "c/o" or "care of".\n"phone", "email" and "website" are the issuer\'s own contact details as printed (not the customer\'s, and not a fax number); use [] or null when none are printed.\n"totals" are the summary lines printed under the line items (subtotal, discount, GST, total), in order.\n"columns" are the headings of the line-item table exactly as printed, left to right.\n"rows" has one array per line item with one string per column, in the same order as "columns".\n"boxes" says where each thing is on image 1: four numbers from 0 to 1, as fractions of that image, measured from its top-left corner, in the order left, top, right, bottom. "table" covers the heading row and every line-item row but not the totals; "supplier" is the printed name; "invoice_no", "date" and "total" cover just the value. Use null for anything that is not on image 1.\n\nRules: copy every value exactly as printed and never calculate or correct one. Join a wrapped description into one cell. Use "" for a cell the invoice leaves blank. Do not put subtotal or total lines in "rows". Dates are day-first unless the month is written as a word. If something cannot be read, use null or "" and do not guess.\n';
 function canvasBlob(canvas, rect, page) {
   return new Promise(res => {
     const sx = canvas.width / page.w, sy = canvas.height / page.h;
@@ -3577,7 +3632,8 @@ function aiResult(o) {
   const res = { fields: {}, totals: [], columns: [], rows: [], tables: [], custom: [], docType: 'Invoice', notes: [] };
   if (!o || typeof o !== 'object') return res;
   const set = (k, v) => { if (v !== '' && v != null) res.fields[k] = { value: v, src: 'ai' }; };
-  set('supplier', str(o.supplier)); set('abn', str(o.abn).replace(/\D/g, '')); set('invoice_no', str(o.invoice_no));
+  const supplier = str(o.supplier);
+  set('supplier', Engine.isCareOf(supplier) ? '' : supplier); set('abn', str(o.abn).replace(/\D/g, '')); set('invoice_no', str(o.invoice_no));
   for (const k of ['date', 'due_date']) { const d = Engine.parseDate(str(o[k]), false); set(k, d ? d.iso : str(o[k])); }
   const list = v => (Array.isArray(v) ? v : v == null ? [] : Engine.splitList(v)).map(str).filter(Boolean).slice(0, 3);
   set('phone', list(o.phone).join(', ')); set('email', list(o.email).filter(Engine.isEmail).map(e => e.toLowerCase()).join(', '));
@@ -3744,7 +3800,7 @@ function gemErr(e) {
 const GEM_PROMPT = 'You are reading a supplier invoice from page images, to turn it into spreadsheet rows and to mark where things are printed on each page.\n\n' +
   'Reply with only one JSON object, in exactly this shape:\n' +
   '{"supplier": string or null, "abn": string or null, "invoice_no": string or null, "date": "YYYY-MM-DD" or null, "due_date": "YYYY-MM-DD" or null, "phone": [string], "email": [string], "website": string or null, "rotation": [number], "totals": [{"label": string, "value": number}], "columns": [string], "column_keys": [string], "rows": [[string]], "boxes": [{"label": "table" | "supplier" | "logo" | "invoice_no" | "date" | "total", "page": number, "box_2d": [ymin, xmin, ymax, xmax]}]}\n\n' +
-  '"supplier" is the business that issued the invoice (read the logo if the name is only there), not the customer it is billed to.\n' +
+  '"supplier" is the business that issued the invoice (read the logo if the name is only there), not the customer it is billed to, and not a line that starts with "c/-", "c/o" or "care of".\n' +
   '"phone", "email" and "website" are the issuer\'s own contact details as printed (not the customer\'s, and not a fax number); use [] or null when none are printed.\n' +
   '"rotation" has one number per page image: how many degrees clockwise that image must be turned so its text reads upright, one of 0, 90, 180 or 270. When it is not 0, still read the page as best you can.\n' +
   '"totals" are the summary lines printed under the line items (subtotal, discount, GST, total), in order.\n' +
