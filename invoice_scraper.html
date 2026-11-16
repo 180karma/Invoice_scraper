@@ -3599,9 +3599,10 @@ async function aiRead(doc) {
 
 /* ================= Gemini: scans pictures and unreadable pages, places the boxes, reads the lines ================= */
 const GEM_API = 'https://generativelanguage.googleapis.com/v1beta/';
+const GEM_MODEL = 'gemini-3.5-flash';
 const Gem = {
   KEY: 'invoice-scraper.gemini.v1',
-  key: '', remember: true, model: 'auto', auto: true, models: null, listedAt: 0,
+  key: '', remember: true, model: GEM_MODEL, auto: true, models: null, listedAt: 0,
   blocked: false, noUse: {}, queue: [], running: false,
   // the gemini-extract Edge Function holds the key in Supabase; null until tried, false when it can't scan
   server: null, serverWhy: '',
@@ -3612,7 +3613,7 @@ const Gem = {
       const o = JSON.parse(localStorage.getItem(this.KEY) || 'null'); if (!o || typeof o !== 'object') return;
       this.key = typeof o.key === 'string' ? o.key.trim().slice(0, 200) : '';
       this.remember = o.remember !== false; this.auto = o.auto !== false;
-      this.model = typeof o.model === 'string' && /^(auto|flash|[\w.\-]{3,80})$/.test(o.model) ? o.model : 'auto';
+      this.model = GEM_MODEL;
       if (Array.isArray(o.models) && +o.listedAt > Date.now() - 86400000) { this.models = o.models.filter(m => m && typeof m.id === 'string' && /^gemini-[\w.\-]+$/.test(m.id)).map(m => ({ id: m.id, name: String(m.name || m.id).slice(0, 60), v: +m.v || 0, preview: !!m.preview, tier: +m.tier || 2 })); this.listedAt = +o.listedAt; }
     } catch (e) {}
   },
@@ -3705,11 +3706,7 @@ async function gemList(force) {
   Gem.listedAt = Date.now(); Gem.save();
   return Gem.models;
 }
-function gemChain() {
-  if (Gem.model !== 'auto' && Gem.model !== 'flash') return [Gem.model];
-  const a = gemPick(Gem.model === 'flash' ? 'flash' : 'any'), f = gemPick('flash');
-  return [...new Set([a && a.id, f && f.id, 'gemini-flash-latest'].filter(Boolean))];
-}
+function gemChain() { return [GEM_MODEL]; }
 function looseJson(t) {
   try { return JSON.parse(t); } catch (e) {}
   const f = /```(?:json)?\s*([\s\S]*?)```/.exec(t); if (f) { try { return JSON.parse(f[1]); } catch (e) {} }
@@ -3813,7 +3810,6 @@ async function geminiScan(doc) {
   const ctl = S.aiCtl = new AbortController(), timer = setTimeout(() => ctl.abort(), 240000);
   let turned = false;
   try {
-    if (!Gem.models) { try { await gemList(); } catch (e) { if (e.code !== 'http' || e.status < 500) throw e; } }
     const parts = [{ text: GEM_PROMPT }], n = Math.min(doc.pages.length, 6);
     for (let pi = 0; pi < n; pi++) {
       const c = await ensureCanvas(doc, pi); if (!c) continue;
@@ -4413,7 +4409,7 @@ const Cloud = {
     if (typeof d.autoLayout === 'boolean') { S.autoTpl = d.autoLayout; try { localStorage.setItem(AUTO_TPL_KEY, d.autoLayout ? '1' : '0'); } catch (e) {} }
     if (typeof d.folderAuto === 'boolean') Files.auto = d.folderAuto;
     if (typeof d.folderSub === 'boolean') Files.sub = d.folderSub;
-    if (typeof d.geminiModel === 'string' && /^(auto|flash|[\w.\-]{3,80})$/.test(d.geminiModel)) Gem.model = d.geminiModel;
+    Gem.model = GEM_MODEL;
     if (typeof d.geminiAuto === 'boolean') Gem.auto = d.geminiAuto;
     Files.save(); Gem.save();
   },
@@ -4631,7 +4627,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && Cl
 /* settings */
 function openSettings(note) {
   S.setNote = note || ''; renderSettings(''); $('#settings').hidden = false;
-  setTimeout(() => { const k = $(Gem.can() ? '#g-model' : '#g-key'); if (k) k.focus(); }, 30);
+  setTimeout(() => { const k = $('#g-key'); if (k) k.focus(); }, 30);
   if (Files.dir) { const was = Files.perm; Files.ready(false).then(() => { if (Files.perm !== was && !$('#settings').hidden) renderSettings(''); }); }
 }
 function closeSettings() {
@@ -4646,9 +4642,6 @@ function closeSettings() {
   }
 }
 function renderSettings(msg) {
-  const ms = Gem.models, a = ms ? gemPick('any') : null, f = ms ? gemPick('flash') : null;
-  const opts = [['auto', 'Newest model' + (a ? ': ' + a.name : '')], ['flash', 'Newest Flash, faster and cheaper' + (f ? ': ' + f.name : '')]].concat((ms || []).map(m => [m.id, m.name + (m.preview ? ' (preview)' : '')]));
-  if (!opts.some(o => o[0] === Gem.model)) opts.push([Gem.model, Gem.model]);
   // the saved key is never written back into the page: there is only a "saved" state, Replace and Forget
   const keyBox = Gem.key && !S.keyEdit
     ? '<div class="keysaved"><span class="pill good">Key saved' + (Gem.remember ? ' in this browser' : ' until this page closes') + '</span><button class="btn small" type="button" data-set="replace">Replace</button><button class="btn small" type="button" data-set="forget">Forget</button></div>'
@@ -4676,8 +4669,6 @@ function renderSettings(msg) {
     '<div class="field"><label for="g-key">Gemini API key in this browser (fallback)</label>' + keyBox +
     '<p class="note" id="g-keynote">Only needed when scanning through Supabase isn’t set up. Make one at aistudio.google.com/apikey (<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">open it</a>). Once saved, the key is never shown again, not even here. It goes only to Google, with the page images, and scans are billed to that key’s Google account.</p></div>' +
     '<label class="chk" for="g-remember"><input type="checkbox" id="g-remember"' + (Gem.remember ? ' checked' : '') + '>Remember the key in this browser</label>' +
-    '<div class="field"><label for="g-model">Model</label><select id="g-model">' + opts.map(o => '<option value="' + esc(o[0]) + '"' + (o[0] === Gem.model ? ' selected' : '') + '>' + esc(o[1]) + '</option>').join('') + '</select>' +
-    '<p class="note">Newest model picks the latest Gemini your key can use, from Google’s own list. If the key can’t use it (the newest Pro-class model may need a paid key), the scan steps down to the newest Flash.</p></div>' +
     '<label class="chk" for="g-auto"><input type="checkbox" id="g-auto"' + (Gem.auto ? ' checked' : '') + '>Scan automatically when an opened page is a picture or can’t be read</label>' +
     '<div class="row"><button class="btn primary" type="button" data-set="check"' + (Gem.can() || Cloud.ready() ? '' : ' disabled') + '>Check Gemini</button><button class="btn" type="button" data-set="close">Done</button></div>' +
     '<p class="note" id="g-msg" aria-live="polite">' + hideKey(msg) + '</p></div>';
@@ -4729,7 +4720,6 @@ $('#settings').addEventListener('change', e => {
     return;
   }
   if (t.id === 'g-remember') { Gem.remember = t.checked; Gem.save(); }
-  else if (t.id === 'g-model') { Gem.model = t.value; Gem.noUse = {}; Gem.save(); }
   else if (t.id === 'g-auto') { Gem.auto = t.checked; Gem.save(); }
   else if (t.id === 'f-auto') { Files.auto = t.checked; Files.save(); if (Files.auto) { S.docs.forEach(queueFileSave); } }
   else if (t.id === 'f-sub') { Files.sub = t.checked; Files.save(); }
