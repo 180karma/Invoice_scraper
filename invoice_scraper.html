@@ -343,6 +343,10 @@ a.contact:hover { background: var(--wash); text-decoration: underline; text-unde
 .staffrow .who { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
 #staff-box select, #staff-box input { height: 32px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 0 8px; }
 #staff-box .row input { flex: 1 1 180px; min-width: 0; }
+.admindel { display: flex; flex-direction: column; gap: 8px; }
+.admindel select { width: 100%; max-width: 100%; height: 40px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); padding: 0 8px; }
+.admindel .confirm { border: 1px solid var(--bad); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; background: var(--bad-bg); }
+.admindel .confirm p { margin: 0; color: var(--ink); }
 .modal .keysaved .pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 3px 10px; }
 .modal .keysaved .pill::before { margin-top: 0; }
 .modal h3.sec { margin: 6px 0 0; }
@@ -1680,7 +1684,8 @@ const Library = (() => {
         if (l.x && typeof l.x === 'object') { const x = {}; let n = 0; for (const [a, b] of Object.entries(l.x)) { if (n >= 12) break; x[str(a, 40)] = str(b, 200); n++; } if (n) L.x = x; }
         if (L.item_no != null || L.description != null) inv.lines.push(L);
       }
-      if (!inv.lines.length) continue;
+      // A header can outlive its lines: deleting line items keeps the invoice, so a later sync does not drop it.
+      if (!inv.lines.length && !inv.supplier && !inv.invoice_no && !inv.file && inv.total == null) continue;
       inv.key = invoiceKey(inv); st.invoices[inv.key] = inv;
     }
     if (raw.hidden && typeof raw.hidden === 'object') for (const k of Object.keys(raw.hidden).slice(0, 5000)) st.hidden[str(k, 400)] = 1;
@@ -2622,6 +2627,14 @@ const Logos = {
       this.fetch(path);
     } catch (e) {}
   },
+  // Remember logo files to remove on the next sync. A missing delete policy leaves them queued.
+  queueRemove(paths) {
+    const list = [...new Set((paths || []).filter(Boolean))];
+    if (!list.length || !Cloud.meta) return;
+    Cloud.meta.logoRm = [...new Set((Cloud.meta.logoRm || []).concat(list))];
+    list.forEach(p => { this.cache[p] = ''; });
+    Cloud.saveMeta();
+  },
 };
 function logoSrc(supplierId, fallback) {
   const stored = Logos.src(supplierId);
@@ -3557,6 +3570,8 @@ const Store = {
   },
   async remove(id) { S.templates = S.templates.filter(t => t.id !== id); this.saveLocal(); if (this.db) { try { await this.db.doc('layouts/' + id).delete(); } catch (e) {} } },
 };
+// Suppliers whose layout or logo was just deleted. Stops the open invoice from saving that layout straight back.
+const tplHold = new Set();
 // how: 'manual' (the Save button) or 'auto'; returns null when there was nothing to save
 async function saveTemplateFor(doc, how) {
   const f = doc.result.fields, p0 = doc.pages[0];
@@ -3572,7 +3587,7 @@ async function saveTemplateFor(doc, how) {
   const t = cleanTpl({ id, name, abn, headerSig: doc.fp ? doc.fp.headerSig : '', zones, logo, phone: c.phone || (old && old.phone) || '', email: c.email || (old && old.email) || '', website: c.website || (old && old.website) || '',
     auto: how === 'auto' && (!old || old.auto), updated: new Date().toISOString() });
   const r = await Store.save(t);
-  if (logo && logo.thumb) Logos.put(supplierIdFn()(name, abn), logo.thumb);
+  if (logo && logo.thumb && !tplHold.has(supplierIdFn()(name, abn))) Logos.put(supplierIdFn()(name, abn), logo.thumb);
   doc.tplId = id; doc.touched = false; doc.userEdit = false;
   doc.tplWhy = how === 'auto' ? [old ? 'auto-updated' : 'auto-saved'] : ['saved'];
   if (!old) recheckDocs();
@@ -3580,6 +3595,8 @@ async function saveTemplateFor(doc, how) {
 }
 async function saveTemplate() {
   const doc = cur(); if (!doc) return;
+  const f0 = doc.result && doc.result.fields;
+  if (f0) tplHold.delete(supplierIdFn()(f0.supplier && f0.supplier.value, f0.abn && f0.abn.value));
   const out = await saveTemplateFor(doc, 'manual');
   if (!out) { S.tab = 'details'; renderAll(); toast('Type the supplier name under Details first, so the layout has a name.'); const i = $('#f-supplier'); if (i) i.focus(); return; }
   const r = out.r, name = out.name;
@@ -3591,6 +3608,7 @@ const AUTO_TPL_KEY = 'invoice-scraper.autolayout.v1';
 async function maybeAutoTpl(doc) {
   if (!S.autoTpl || !doc || doc.sample || !doc.result || doc.aiBusy || doc.gemPending || !S.docs.includes(doc)) return null;
   const f = doc.result.fields; if (!f.supplier || !String(f.supplier.value).trim()) return null;
+  if (tplHold.has(supplierIdFn()(String(f.supplier.value), f.abn && f.abn.value))) return null;
   if (!doc.tplId) {
     if (!doc.zones.length || !(doc.result.rows.length || doc.zones.some(z => z.type === 'table'))) return null;
     return saveTemplateFor(doc, 'auto');
@@ -4032,7 +4050,9 @@ const SB_ENV = (() => {
   const url = typeof c.supabaseUrl === 'string' ? c.supabaseUrl.trim().replace(/\/+$/, '') : '';
   const key = typeof c.supabaseAnonKey === 'string' ? c.supabaseAnonKey.trim() : '';
   const u = /^https?:\/\/[\w.\-]+(:\d+)?$/.test(url) ? url : '';
-  return { url: u, key: key && !sbKeyProblem(key) ? key.slice(0, 400) : (!u || u === SB_URL ? SB_ANON : '') };
+  const rawEmails = Array.isArray(c.adminEmails) ? c.adminEmails.join(',') : (typeof c.adminEmails === 'string' ? c.adminEmails : '');
+  const adminEmails = [...new Set(rawEmails.split(/[\s,;]+/).map(s => String(s || '').trim().toLowerCase()).filter(s => s.includes('@')))];
+  return { url: u, key: key && !sbKeyProblem(key) ? key.slice(0, 400) : (!u || u === SB_URL ? SB_ANON : ''), adminEmails };
 })();
 const SB_HOME = SB_ENV.url || SB_URL;
 const Cloud = {
@@ -4040,10 +4060,17 @@ const Cloud = {
   url: SB_HOME, key: '', ownUrl: '', ownKey: '', keyFrom: '', sb: null, user: null, libraryId: null, state: 'off', err: '', loaded: false, applying: false,
   sentTo: '', email: '', keyEdit: false, msg: '', dirty: {}, meta: null, tplSnap: {}, timer: 0, tries: 0, chain: Promise.resolve(), connecting: null,
   role: null, checked: false, booted: false, gateMsg: '',
-  freshMeta() { return { uid: '', flagAt: {}, setAt: '', setSig: '', folders: {}, lc: {}, sup: {}, uploadedAt: '', pulledAt: '', role: '', roleEmail: '' }; },
-  isAdmin() { return this.role === 'admin'; },
-  // signed in as staff (not admin): edits and deletes are hidden here and refused by Supabase
-  limited() { return !!(this.key && this.role && this.role !== 'admin'); },
+  freshMeta() { return { uid: '', flagAt: {}, setAt: '', setSig: '', folders: {}, lc: {}, sup: {}, uploadedAt: '', pulledAt: '', role: '', roleEmail: '', logoRm: [], supGone: {}, gone: {}, seen: {} }; },
+  // Admin on the staff list. When ADMIN_EMAILS is set, only those sign-in emails count, so other accounts cannot delete.
+  isAdmin() {
+    if (this.role !== 'admin') return false;
+    const list = SB_ENV.adminEmails || [];
+    if (!list.length) return true;
+    const email = String((this.user && this.user.email) || (this.meta && this.meta.roleEmail) || '').toLowerCase();
+    return list.includes(email);
+  },
+  // signed in, but not the admin: deletes are hidden here and refused by Supabase
+  limited() { return !!(this.key && this.role && !this.isAdmin()); },
   // a person who signed in on this device before may keep working while Supabase can't be reached
   offlinePass() { return !this.user && !!this.meta && (this.meta.role === 'admin' || this.meta.role === 'staff') && (this.state === 'offline' || !navigator.onLine); },
   async loadRole() {
@@ -4122,16 +4149,48 @@ const Cloud = {
 
   /* ---- what changed locally ---- */
   mark(id, at) { if (!this.watching()) return; this.dirty[id] = { at: at || nowIso() }; this.saveQ(); this.schedule(1500); },
+  // A local delete is remembered with the server generation we had seen, until Supabase itself shows the row deleted.
+  noteGone(id, at) {
+    if (!this.meta) return;
+    this.meta.gone = this.meta.gone || {}; this.meta.seen = this.meta.seen || {};
+    this.meta.gone[id] = { at: at || nowIso(), seen: this.meta.seen[id] || '' };
+  },
+  clearGone(id) { if (this.meta && this.meta.gone) delete this.meta.gone[id]; },
+  // tomb: server already deleted it. hold: our delete is still the newest change. keep: leave local. take: server is newer.
+  decideRow(id, hasLocal, la, ra, remoteUpdated, remoteDeleted, mine) {
+    const gone = this.meta.gone && this.meta.gone[id], pend = this.dirty[id];
+    const seen = (this.meta.seen && this.meta.seen[id]) || '';
+    const seenT = sbTime(seen), same = !!(seen && (remoteUpdated === seen || (seenT && ra === seenT)));
+    if (remoteDeleted) {
+      if (mine && ((pend && sbTime(pend.at) > ra) || (hasLocal && la > ra))) return 'keep';
+      return 'tomb';
+    }
+    if (!mine) return (ra === la && hasLocal) ? 'keep' : 'take';
+    if (gone) {
+      const basis = sbTime(gone.seen) || seenT;
+      if (!(basis && ra > basis && ra > sbTime(gone.at))) return 'hold';
+    }
+    if (pend && !(seen && ra > seenT && ra > sbTime(pend.at))) return 'keep';
+    if (same && hasLocal) return 'keep';
+    if (la > ra) return 'keep';
+    if (ra > la) return 'take';
+    return hasLocal ? 'keep' : 'take';
+  },
   libSnap(st) {
     const inv = {}; for (const [k, v] of Object.entries(st.invoices || {})) inv[k] = JSON.stringify(v);
     return { inv, ign: Object.assign({}, st.ignored), hid: Object.assign({}, st.hidden) };
   },
   libDiff(b, st) {
     const at = nowIso(), seen = new Set();
-    for (const [k, v] of Object.entries(st.invoices || {})) { seen.add(k); if (b.inv[k] !== JSON.stringify(v)) this.mark('inv:' + k, at); }
-    for (const k of Object.keys(b.inv)) if (!seen.has(k)) this.mark('inv:' + k, at);
+    for (const [k, v] of Object.entries(st.invoices || {})) {
+      seen.add(k);
+      if (b.inv[k] !== JSON.stringify(v)) { this.clearGone('inv:' + k); this.mark('inv:' + k, at); }
+    }
+    for (const k of Object.keys(b.inv)) if (!seen.has(k)) { this.noteGone('inv:' + k, at); this.mark('inv:' + k, at); }
     for (const [p, cur, was] of [['ign', st.ignored || {}, b.ign], ['hid', st.hidden || {}, b.hid]]) {
-      for (const k of new Set(Object.keys(cur).concat(Object.keys(was)))) if (!cur[k] !== !was[k]) { this.meta.flagAt[p + ':' + k] = at; this.mark(p + ':' + k, at); }
+      for (const k of new Set(Object.keys(cur).concat(Object.keys(was)))) if (!cur[k] !== !was[k]) {
+        const id = p + ':' + k; this.meta.flagAt[id] = at; if (cur[k]) this.clearGone(id); else this.noteGone(id, at); this.mark(id, at);
+      }
     }
     this.saveMeta();
   },
@@ -4140,7 +4199,11 @@ const Cloud = {
     const now = this.tplMap(S.templates), was = this.tplSnap, at = nowIso();
     this.tplSnap = now;
     if (!this.watching()) return;
-    for (const id of new Set(Object.keys(now).concat(Object.keys(was)))) if (now[id] !== was[id]) this.mark('tpl:' + id, at);
+    for (const id of new Set(Object.keys(now).concat(Object.keys(was)))) if (now[id] !== was[id]) {
+      if (now[id]) this.clearGone('tpl:' + id); else this.noteGone('tpl:' + id, at);
+      this.mark('tpl:' + id, at);
+    }
+    this.saveMeta();
   },
   settingsData() { return { autoLayout: !!S.autoTpl, folderAuto: !!Files.auto, folderSub: !!Files.sub }; },
   settingsChanged() {
@@ -4204,7 +4267,7 @@ const Cloud = {
       if (!this.role) return false;
       await this.ensureLibraryId();
       if (this.meta.uid !== this.libraryId) {
-        const keep = { flagAt: this.meta.flagAt, setAt: this.meta.setAt, setSig: this.meta.setSig, folders: this.meta.folders, role: this.meta.role, roleEmail: this.meta.roleEmail };
+        const keep = { flagAt: this.meta.flagAt, setAt: this.meta.setAt, setSig: this.meta.setSig, folders: this.meta.folders, role: this.meta.role, roleEmail: this.meta.roleEmail, logoRm: this.meta.logoRm, supGone: this.meta.supGone };
         this.meta = Object.assign(this.freshMeta(), keep, { uid: this.libraryId });
         this.saveMeta();
       }
@@ -4241,6 +4304,7 @@ const Cloud = {
     if (/shared kitchen library is not set up|app_meta/i.test(m)) return 'The shared kitchen library is not set up. Run supabase-schema.sql in the Supabase SQL editor.';
     if (/invalid api key|no api key|apikey/i.test(m)) return 'Supabase did not accept the key. Check it is the anon or publishable key for this project.';
     if (/relation .* does not exist|could not find the table|schema cache/i.test(m)) return 'The tables are not set up in Supabase yet. Run supabase-schema.sql in its SQL editor.';
+    if (this.meta && this.meta.logoRm && this.meta.logoRm.length && /row-level|unauthorized|permission|policy|violat/i.test(m)) return 'Supabase refused to delete a supplier logo. In the SQL editor, run the block at the end of supabase-schema.sql that starts with admin delete supplier logos.';
     if (/row-level security|violates row-level|permission denied/i.test(m)) return 'Supabase refused the write. Run supabase-schema.sql in its SQL editor.';
     if (/jwt|token.*expired|not authenticated/i.test(m)) return 'Supabase did not accept the connection. Reload the page.';
     return hideKey(m).slice(0, 200);
@@ -4259,14 +4323,29 @@ const Cloud = {
     const off = this.isNetwork(e);
     this.tries = Math.min(this.tries + 1, 8);
     this.setState(off ? 'offline' : 'error', this.say(e));
-    if (this.pending()) this.schedule(Math.min(300000, 4000 * Math.pow(2, this.tries - 1)));
+    const leftover = this.pending() || (this.meta && this.meta.logoRm && this.meta.logoRm.length) || (this.meta && this.meta.supGone && Object.keys(this.meta.supGone).length);
+    if (leftover) this.schedule(Math.min(300000, 4000 * Math.pow(2, this.tries - 1)));
   },
   async up(table, rows, conflict) {
-    const groups = {};
-    for (const r of rows) { const g = Object.keys(r).join(','); (groups[g] = groups[g] || []).push(r); }
+    const cols = conflict.split(','), landed = new Map(), groups = {};
+    const ident = row => cols.map(c => String(row[c] == null ? '' : row[c])).join('|');
+    for (const r of rows) { const g = Object.keys(r).sort().join(','); (groups[g] = groups[g] || []).push(r); }
     for (const list of Object.values(groups)) for (let i = 0; i < list.length; i += 500) {
-      const { error } = await this.sb.from(table).upsert(list.slice(i, i + 500).map(sbSafe), { onConflict: conflict });
+      const slice = list.slice(i, i + 500).map(sbSafe);
+      const { data, error } = await this.sb.from(table).upsert(slice, { onConflict: conflict }).select(cols.join(',') + ',updated_at');
       if (error) throw error;
+      for (const row of data || []) landed.set(ident(row), row.updated_at || '');
+    }
+    return landed;
+  },
+  // A trigger that skips a row returns no error and no row. Leaving it queued stops the next pull from treating the skip as success.
+  requireSaved(landed, rows, conflict, label) {
+    const cols = conflict.split(',');
+    const ident = row => cols.map(c => String(row[c] == null ? '' : row[c])).join('|');
+    for (const row of rows) {
+      const id = ident(row);
+      if (landed.has(id)) { if (landed.get(id)) row.updated_at = landed.get(id); continue; }
+      if (this.isAdmin()) throw new Error('Supabase did not save the ' + label + '. It is kept on this device and will be sent again.');
     }
   },
   // true when the queue is empty afterwards
@@ -4275,17 +4354,33 @@ const Cloud = {
     if (!this.ready()) { renderSyncPill(); return false; }
     if (!navigator.onLine) { this.setState('offline', ''); return false; }
     const ids = Object.keys(this.dirty);
-    if (!ids.length) { this.tries = 0; this.setState('synced', ''); return true; }
+    const extra = (this.meta.logoRm && this.meta.logoRm.length) || (this.meta.supGone && Object.keys(this.meta.supGone).length);
+    if (!ids.length && !extra) { this.tries = 0; this.setState('synced', ''); return true; }
     this.setState('syncing', '');
     const snap = Object.assign({}, this.dirty);
     try {
       await this.ensureLibraryId();
       await this.push(snap);
+      let logoErr = null;
+      try { await this.removeQueuedLogos(); } catch (e) { logoErr = e; }
       for (const id of ids) if (this.dirty[id] === snap[id]) delete this.dirty[id];
       this.saveQ(); this.saveMeta(); this.tries = 0;
-      if (this.pending()) { this.setState('syncing', ''); this.schedule(300); return false; }
+      if (logoErr) { this.fail(logoErr); return false; }
+      if (this.pending() || (this.meta.logoRm && this.meta.logoRm.length) || (this.meta.supGone && Object.keys(this.meta.supGone).length)) { this.setState('syncing', ''); this.schedule(300); return false; }
       this.setState('synced', ''); return true;
     } catch (e) { this.fail(e); return false; }
+  },
+  async removeQueuedLogos() {
+    const paths = [...new Set(this.meta.logoRm || [])].filter(Boolean);
+    if (!paths.length) return;
+    if (!this.sb || !this.sb.storage) throw new Error('Supabase storage is not available.');
+    for (let i = 0; i < paths.length; i += 100) {
+      const chunk = paths.slice(i, i + 100);
+      const { error } = await this.sb.storage.from(LOGO_BUCKET).remove(chunk);
+      if (error) throw error;
+    }
+    paths.forEach(p => { Logos.cache[p] = ''; });
+    this.meta.logoRm = [];
   },
   invRow(uid, key, inv, sid, at) {
     const s = v => (v == null ? '' : String(v));
@@ -4325,7 +4420,7 @@ const Cloud = {
         touchedSup = true;
         const i = st.invoices[key];
         if (!i) { inv.push({ user_id: uid, key, deleted: true, updated_at: at }); trims.push([key, 0]); M.lc[key] = 0; continue; }
-        const when = sbIso(i.updated) || sbIso(i.added) || at, sid = idOf(i.supplier, i.abn);
+        const when = sbTime(i.updated) > sbTime(at) ? (sbIso(i.updated) || at) : at, sid = idOf(i.supplier, i.abn);
         inv.push(this.invRow(uid, key, i, sid, when));
         i.lines.forEach((L, n) => lines.push(this.lineRow(uid, key, i, n, L, sid, when)));
         if ((M.lc[key] || 0) > i.lines.length) trims.push([key, i.lines.length]);
@@ -4333,25 +4428,49 @@ const Cloud = {
       } else if (kind === 'tpl') {
         touchedSup = true;
         const t = S.templates.find(x => x.id === key);
-        tpl.push(t ? { user_id: uid, id: key, name: t.name, abn: t.abn || '', supplier_id: idOf(t.name, t.abn), auto: !!t.auto, data: JSON.parse(JSON.stringify(t)), deleted: false, updated_at: sbIso(t.updated) || at }
+        const tWhen = t && sbTime(t.updated) > sbTime(at) ? (sbIso(t.updated) || at) : at;
+        tpl.push(t ? { user_id: uid, id: key, name: t.name, abn: t.abn || '', supplier_id: idOf(t.name, t.abn), auto: !!t.auto, data: JSON.parse(JSON.stringify(t)), deleted: false, updated_at: tWhen }
           : { user_id: uid, id: key, deleted: true, updated_at: at });
       } else if (kind === 'ign' || (kind === 'hid' && !this.limited())) {
         const on = !!(kind === 'ign' ? st.ignored : st.hidden)[key];
         flags.push({ user_id: uid, kind: kind === 'ign' ? 'ignore' : 'hide', item_key: key, deleted: !on, updated_at: sbIso(M.flagAt[id]) || at });
       } else if (kind === 'set' && !this.limited()) set.push({ user_id: uid, name: 'app', data: this.settingsData(), updated_at: sbIso(M.setAt) || at });
     }
-    if (inv.length) await this.up('invoices', inv, 'user_id,key');
-    if (lines.length) await this.up('line_items', lines, 'user_id,invoice_key,line_no');
-    for (const [key, n] of trims) { const { error } = await this.sb.from('line_items').delete().eq('user_id', uid).eq('invoice_key', key).gte('line_no', n); if (error) throw error; }
-    if (tpl.length) await this.up('layouts', tpl, 'user_id,id');
-    if (flags.length) await this.up('ignored_items', flags, 'user_id,kind,item_key');
-    if (set.length) await this.up('settings', set, 'user_id,name');
-    if (touchedSup) {
+    M.seen = M.seen || {};
+    const wrote = async (table, rows, conflict, label, idOf) => {
+      if (!rows.length) return;
+      const landed = await this.up(table, rows, conflict);
+      this.requireSaved(landed, rows, conflict, label);
+      rows.forEach(r => { const id = idOf(r); if (id && r.updated_at) M.seen[id] = r.updated_at; });
+    };
+    await wrote('invoices', inv, 'user_id,key', 'invoice change', r => 'inv:' + r.key);
+    if (lines.length) {
+      const landed = await this.up('line_items', lines, 'user_id,invoice_key,line_no');
+      this.requireSaved(landed, lines, 'user_id,invoice_key,line_no', 'line items');
+    }
+    for (const [key, n] of trims) {
+      const del = await this.sb.from('line_items').delete().eq('user_id', uid).eq('invoice_key', key).gte('line_no', n);
+      if (del.error) throw del.error;
+      const left = await this.sb.from('line_items').select('line_no').eq('user_id', uid).eq('invoice_key', key).gte('line_no', n);
+      if (left.error) throw left.error;
+      if (left.data && left.data.length) throw new Error('Supabase kept line items for an invoice that was changed on this device.');
+    }
+    await wrote('layouts', tpl, 'user_id,id', 'layout change', r => 'tpl:' + r.id);
+    await wrote('ignored_items', flags, 'user_id,kind,item_key', 'ignored-item change', r => (r.kind === 'hide' ? 'hid:' : 'ign:') + r.item_key);
+    await wrote('settings', set, 'user_id,name', 'settings change', () => 'set:app');
+    M.supGone = M.supGone || {};
+    if (touchedSup || Object.keys(M.supGone).length) {
       const at = nowIso(), rows = this.supplierRows(uid, at), sig = r => JSON.stringify([r.name, r.abn, r.phone, r.email, r.website, r.invoice_count, r.total_invoiced, r.last_invoice_date]);
       const out = rows.filter(r => M.sup[r.supplier_id] !== sig(r)), live = new Set(rows.map(r => r.supplier_id));
-      for (const id of Object.keys(M.sup)) if (!live.has(id)) out.push({ user_id: uid, supplier_id: id, deleted: true, updated_at: at });
-      if (out.length) await this.up('suppliers', out, 'user_id,supplier_id');
-      for (const r of out) { if (r.deleted) delete M.sup[r.supplier_id]; else M.sup[r.supplier_id] = sig(r); }
+      for (const id of Object.keys(M.supGone)) if (live.has(id)) delete M.supGone[id];
+      const tomb = id => { if (!out.some(r => r.supplier_id === id && r.deleted)) out.push({ user_id: uid, supplier_id: id, deleted: true, updated_at: M.supGone[id] || at }); };
+      for (const id of Object.keys(M.sup)) if (!live.has(id)) tomb(id);
+      for (const id of Object.keys(M.supGone)) if (!live.has(id)) tomb(id);
+      if (out.length) {
+        const landed = await this.up('suppliers', out, 'user_id,supplier_id');
+        this.requireSaved(landed, out, 'user_id,supplier_id', 'supplier change');
+      }
+      for (const r of out) { if (r.deleted) { delete M.sup[r.supplier_id]; delete M.supGone[r.supplier_id]; } else M.sup[r.supplier_id] = sig(r); }
     }
   },
   async all(table, cols, order) {
@@ -4377,31 +4496,57 @@ const Cloud = {
         this.all('settings', 'name,data,updated_at', ['name'])]);
       const M = this.meta, st = Lib.store, linesOf = {}, put = {}, drop = [], flagOps = [], push = [];
       for (const l of rLines) (linesOf[l.invoice_key] = linesOf[l.invoice_key] || []).push(l);
+      M.seen = M.seen || {}; M.gone = M.gone || {};
       const seenInv = new Set(), lim = this.limited(), me = this.user && this.user.id;
+      const applyInv = r => {
+        const raw = { supplier: r.supplier, abn: r.abn, invoice_no: r.invoice_no, date: r.invoice_date || '', total: r.total == null ? null : +r.total, file: r.file_name, src: r.src,
+          added: r.added_at || '', updated: r.updated_at, phone: r.phone, email: r.email, website: r.website, lines: (linesOf[r.key] || []).sort((a, b) => a.line_no - b.line_no).map(l => l.data) };
+        const one = Object.values(Library.clean({ invoices: { x: raw } }).invoices)[0];
+        if (one) { one.key = r.key; one.updated = r.updated_at || one.updated; put[r.key] = one; }
+      };
       for (const r of rInv) {
         seenInv.add(r.key);
-        const loc = st.invoices[r.key], pend = this.dirty['inv:' + r.key];
-        const la = loc ? sbTime(loc.updated || loc.added) : (pend ? sbTime(pend.at) : 0), ra = sbTime(r.updated_at);
+        const id = 'inv:' + r.key, loc = st.invoices[r.key], pend = this.dirty[id], gone = M.gone[id];
+        const la = loc ? sbTime(loc.updated || loc.added) : (pend ? sbTime(pend.at) : (gone ? sbTime(gone.at) : 0)), ra = sbTime(r.updated_at);
         // staff may only change invoices they added in the last day; Supabase skipped anything else, so its copy stands
         const mine = !lim || (r.created_by === me && Date.now() - sbTime(r.created_at) < 23.5 * 3600000);
         if (r.file_folder && !M.folders[r.key]) M.folders[r.key] = r.file_folder;
-        if (ra > la || (!mine && la > ra)) {
-          delete this.dirty['inv:' + r.key]; M.lc[r.key] = r.deleted ? 0 : (linesOf[r.key] || []).length;
-          if (r.deleted) { if (loc) drop.push(r.key); continue; }
-          const raw = { supplier: r.supplier, abn: r.abn, invoice_no: r.invoice_no, date: r.invoice_date || '', total: r.total == null ? null : +r.total, file: r.file_name, src: r.src,
-            added: r.added_at || '', updated: r.updated_at, phone: r.phone, email: r.email, website: r.website, lines: (linesOf[r.key] || []).sort((a, b) => a.line_no - b.line_no).map(l => l.data) };
-          const one = Object.values(Library.clean({ invoices: { x: raw } }).invoices)[0];
-          if (one) { one.key = r.key; put[r.key] = one; }
-        } else if (la > ra) push.push('inv:' + r.key);
-        else M.lc[r.key] = r.deleted ? 0 : (linesOf[r.key] || []).length;
+        const choice = this.decideRow(id, !!loc, la, ra, r.updated_at, !!r.deleted, mine);
+        if (choice === 'tomb' || choice === 'hold') {
+          if (loc) drop.push(r.key);
+          M.lc[r.key] = 0;
+          if (choice === 'tomb') { this.clearGone(id); delete this.dirty[id]; M.seen[id] = r.updated_at; }
+          else { if (!this.dirty[id]) this.dirty[id] = { at: (gone && gone.at) || nowIso() }; M.seen[id] = M.seen[id] || r.updated_at; }
+          continue;
+        }
+        if (choice === 'keep') {
+          M.lc[r.key] = loc ? (loc.lines || []).length : 0;
+          M.seen[id] = M.seen[id] || r.updated_at;
+          if (la > ra || pend) push.push(id);
+          continue;
+        }
+        delete this.dirty[id]; this.clearGone(id); M.seen[id] = r.updated_at;
+        M.lc[r.key] = r.deleted ? 0 : (linesOf[r.key] || []).length;
+        if (!r.deleted) applyInv(r);
       }
       for (const k of Object.keys(st.invoices)) if (!seenInv.has(k)) push.push('inv:' + k);
       const seenFlag = new Set();
       for (const r of rFlag) {
         const p = r.kind === 'hide' ? 'hid' : 'ign', id = p + ':' + r.item_key; seenFlag.add(id);
-        const la = sbTime(M.flagAt[id]), ra = sbTime(r.updated_at);
-        if (ra > la || (lim && p === 'hid' && la > ra)) { flagOps.push([p, r.item_key, !r.deleted]); M.flagAt[id] = r.updated_at; delete this.dirty[id]; }
-        else if (la > ra) push.push(id);
+        const on = !!(p === 'ign' ? st.ignored : st.hidden)[r.item_key];
+        const pend = this.dirty[id], gone = M.gone[id];
+        const la = sbTime((pend && pend.at) || (gone && gone.at) || M.flagAt[id]), ra = sbTime(r.updated_at);
+        const mine = !(lim && p === 'hid');
+        const choice = this.decideRow(id, on, la, ra, r.updated_at, !!r.deleted, mine);
+        // A server tombstone means the flag is off. Our own tombstone (gone) keeps it off until the server moves on.
+        if (choice === 'tomb' || choice === 'hold') {
+          if (choice === 'tomb') { this.clearGone(id); delete this.dirty[id]; M.seen[id] = r.updated_at; if (on) flagOps.push([p, r.item_key, false]); }
+          else { if (on) flagOps.push([p, r.item_key, false]); if (!this.dirty[id]) this.dirty[id] = { at: (gone && gone.at) || nowIso() }; }
+          M.flagAt[id] = M.flagAt[id] || r.updated_at;
+          continue;
+        }
+        if (choice === 'keep') { M.seen[id] = M.seen[id] || r.updated_at; if (la > ra || pend) push.push(id); continue; }
+        flagOps.push([p, r.item_key, !r.deleted]); M.flagAt[id] = r.updated_at; M.seen[id] = r.updated_at; delete this.dirty[id]; this.clearGone(id);
       }
       for (const [p, set] of [['ign', st.ignored || {}], ['hid', st.hidden || {}]]) for (const k of Object.keys(set)) if (!seenFlag.has(p + ':' + k) && !(lim && p === 'hid')) push.push(p + ':' + k);
       this.applying = true;
@@ -4417,15 +4562,21 @@ const Cloud = {
         let tplCh = false; const seenTpl = new Set();
         for (const r of rTpl) {
           seenTpl.add(r.id);
-          const i = S.templates.findIndex(t => t.id === r.id), loc = S.templates[i], pend = this.dirty['tpl:' + r.id];
-          const la = loc ? sbTime(loc.updated) : (pend ? sbTime(pend.at) : 0), ra = sbTime(r.updated_at);
-          if (ra > la) {
-            delete this.dirty['tpl:' + r.id];
-            if (r.deleted) { if (i >= 0) { S.templates.splice(i, 1); tplCh = true; } continue; }
-            const d = Object.assign({}, r.data, { id: r.id, updated: r.updated_at });
-            if (!validTpl(d)) continue;
-            const t = cleanTpl(d); if (i >= 0) S.templates[i] = t; else S.templates.push(t); tplCh = true;
-          } else if (la > ra) push.push('tpl:' + r.id);
+          const id = 'tpl:' + r.id, i = S.templates.findIndex(t => t.id === r.id), loc = S.templates[i], pend = this.dirty[id], gone = M.gone[id];
+          const la = loc ? sbTime(loc.updated) : (pend ? sbTime(pend.at) : (gone ? sbTime(gone.at) : 0)), ra = sbTime(r.updated_at);
+          const choice = this.decideRow(id, i >= 0, la, ra, r.updated_at, !!r.deleted, !lim);
+          if (choice === 'tomb' || choice === 'hold') {
+            if (i >= 0) { S.templates.splice(i, 1); tplCh = true; }
+            if (choice === 'tomb') { this.clearGone(id); delete this.dirty[id]; M.seen[id] = r.updated_at; }
+            else if (!this.dirty[id]) this.dirty[id] = { at: (gone && gone.at) || nowIso() };
+            continue;
+          }
+          if (choice === 'keep') { M.seen[id] = M.seen[id] || r.updated_at; if (la > ra || pend) push.push(id); continue; }
+          delete this.dirty[id]; this.clearGone(id); M.seen[id] = r.updated_at;
+          if (r.deleted) { if (i >= 0) { S.templates.splice(i, 1); tplCh = true; } continue; }
+          const d = Object.assign({}, r.data, { id: r.id, updated: r.updated_at });
+          if (!validTpl(d)) continue;
+          const t = cleanTpl(d); if (i >= 0) S.templates[i] = t; else S.templates.push(t); tplCh = true;
         }
         for (const t of S.templates) if (!seenTpl.has(t.id)) push.push('tpl:' + t.id);
         if (tplCh) { Store.saveLocal(); recheckDocs(); }
@@ -4492,7 +4643,7 @@ function sbBoxHtml() {
   if (C.key && C.user && C.checked && !C.role) {
     acct = '<div class="keysaved sbwho"><span><b>' + esc(C.user.name || userLabel(C.user.email)) + '</b> is not on the staff list.</span><button class="btn small" type="button" data-set="sb-signout">Sign out</button></div>';
   } else if (C.key && C.user) {
-    acct = '<div class="keysaved sbwho"><span>Signed in as <b>' + esc(C.user.name || userLabel(C.user.email)) + '</b>' + (C.role ? ' (' + (C.isAdmin() ? 'admin' : 'staff') + ')' : '') + '</span><button class="btn small" type="button" data-set="sb-signout">Sign out</button></div>' +
+    acct = '<div class="keysaved sbwho"><span>Signed in as <b>' + esc(C.user.name || userLabel(C.user.email)) + '</b>' + (C.role ? ' (' + esc(C.role) + ')' : '') + '</span><button class="btn small" type="button" data-set="sb-signout">Sign out</button></div>' +
       '<p class="row" id="sb-state">' + sbStateHtml() + '</p>' +
       '<div class="row"><button class="btn small' + (C.meta.uploadedAt ? '' : ' primary') + '" type="button" data-set="sb-upload">' + (C.meta.uploadedAt ? 'Upload everything again' : 'Upload existing data') + '</button><button class="btn small" type="button" data-set="sb-pull">Load from Supabase</button></div>' +
       '<p class="note">Every change is saved to Supabase while you are signed in.' + (C.meta.uploadedAt ? ' Everything in this browser was uploaded on ' + esc(niceDate(C.meta.uploadedAt.slice(0, 10))) + '.' : '') + '</p>';
@@ -4658,6 +4809,240 @@ window.addEventListener('online', () => { if (Gem.serverWhy === 'network') Gem.s
 window.addEventListener('offline', () => { if (Cloud.sb) Cloud.setState('offline', ''); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && Cloud.ready() && Date.now() - sbTime(Cloud.meta.pulledAt) > 300000) Cloud.syncNow(); });
 
+/* ================= admin delete: one type at a time, with a named confirm ================= */
+const AdminDel = { kind: 'invoice', which: '', step: '', busy: false, msg: '' };
+function supplierIndex() {
+  const idOf = supplierIdFn();
+  const map = new Map();
+  const add = (id, name) => {
+    const s = String(id || '');
+    if (!s) return null;
+    let row = map.get(s);
+    if (!row) { row = { id: s, name: (name && String(name).trim()) || s, invoices: [], layouts: [] }; map.set(s, row); }
+    if (name && String(name).trim() && (row.name === row.id || row.name === 'unknown')) row.name = String(name).trim();
+    return row;
+  };
+  for (const i of Object.values(Lib.store.invoices || {})) { const row = add(idOf(i.supplier, i.abn), i.supplier); if (row) row.invoices.push(i); }
+  for (const t of S.templates) { const row = add(idOf(t.name, t.abn), t.name); if (row) row.layouts.push(t); }
+  return { idOf, list: [...map.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })) };
+}
+function countLines(invs) { let n = 0; for (const i of invs) n += (i.lines || []).length; return n; }
+function countPriced(invs) { let n = 0; for (const i of invs) for (const L of i.lines || []) if (typeof L.unit_price === 'number') n++; return n; }
+const noun = (n, one, many) => n + ' ' + (n === 1 ? one : (many || one + 's'));
+function suppliersLeftBehind(idx, dropInv, dropTpl) {
+  const inv = new Set(dropInv || []), tpl = new Set(dropTpl || []), gone = [];
+  for (const s of idx.list) {
+    if (s.invoices.some(i => !inv.has(i.key))) continue;
+    if (s.layouts.some(t => !tpl.has(t.id))) continue;
+    gone.push(s.id);
+  }
+  return gone;
+}
+function invPickLabel(i) {
+  return (i.supplier || 'Unknown supplier') + ' · ' + (i.invoice_no || 'no number') + ' · ' + niceDate(i.date || String(i.added || '').slice(0, 10)) + ' · ' + noun((i.lines || []).length, 'line');
+}
+function adminWhichOptions(kind) {
+  const idx = supplierIndex();
+  if (kind === 'invoice') return Object.values(Lib.store.invoices || {}).sort((a, b) => invPickLabel(a).localeCompare(invPickLabel(b))).map(i => ({ id: i.key, label: invPickLabel(i) }));
+  if (kind === 'supplier' || kind === 'logo') return idx.list.map(s => ({ id: s.id, label: s.name + ' · ' + noun(s.invoices.length, 'invoice') + (s.layouts.length ? ' · layout' : '') }));
+  if (kind === 'layout') return S.templates.map(t => ({ id: t.id, label: t.name }));
+  return [];
+}
+function adminNeedsWhich(kind) { return kind === 'invoice' || kind === 'supplier' || kind === 'layout' || kind === 'logo'; }
+function adminPlan(kind, which) {
+  const idx = supplierIndex();
+  const invs = Object.values(Lib.store.invoices || {});
+  const tpls = S.templates.slice();
+  const fail = reason => ({ ok: false, reason, detail: reason, dropInv: [], dropTpl: [], touchInv: [], edit: '', logoIds: [], hold: [], supGone: [], clearFlags: false, clearThumbs: false, listAllLogos: false });
+  const blank = { ok: true, kind, dropInv: [], dropTpl: [], touchInv: [], edit: '', editTpl: '', logoIds: [], hold: [], clearFlags: false, clearThumbs: false, listAllLogos: false };
+  const finish = plan => { plan.supGone = suppliersLeftBehind(idx, plan.dropInv, plan.dropTpl); return plan; };
+  if (kind === 'invoice') {
+    const inv = invs.find(i => i.key === which);
+    if (!inv) return fail(invs.length ? 'Choose an invoice.' : 'There are no invoices to delete.');
+    const sup = idx.list.find(s => s.invoices.some(i => i.key === inv.key));
+    const only = sup && sup.invoices.length === 1 && !sup.layouts.length;
+    const plan = finish(Object.assign({}, blank, { dropInv: [inv.key] }));
+    plan.detail = 'Delete invoice ' + (inv.invoice_no || inv.file || 'with no number') + ' from ' + (inv.supplier || 'an unknown supplier')
+      + (inv.date ? ' (' + niceDate(inv.date) + ')' : '') + ' and its ' + noun((inv.lines || []).length, 'line item') + '. '
+      + (only ? 'This is the supplier’s only invoice and it has no saved layout, so the supplier is removed too. The logo file stays.'
+        : 'The supplier, any other invoices, the saved layout and the logo stay.');
+    return plan;
+  }
+  if (kind === 'invoices') {
+    if (!invs.length) return fail('There are no invoices to delete.');
+    const plan = finish(Object.assign({}, blank, { dropInv: invs.map(i => i.key) }));
+    plan.detail = 'Delete ' + noun(invs.length, 'invoice') + ' and their ' + noun(countLines(invs), 'line item')
+      + '. Saved layouts and logo files stay. A supplier left with no layout is removed as well (' + noun(plan.supGone.length, 'supplier') + ').';
+    return plan;
+  }
+  if (kind === 'lines') {
+    const n = countLines(invs);
+    if (!n) return fail('There are no line items to delete.');
+    const plan = Object.assign({}, blank, { touchInv: invs.filter(i => (i.lines || []).length).map(i => i.key), edit: 'lines', supGone: [] });
+    plan.detail = 'Remove ' + noun(n, 'line item') + ' (the records) from ' + noun(plan.touchInv.length, 'invoice')
+      + '. Invoice headers stay. Price history is removed with the lines.';
+    return plan;
+  }
+  if (kind === 'supplier' || kind === 'suppliers') {
+    const targets = kind === 'supplier' ? idx.list.filter(s => s.id === which) : idx.list.slice();
+    if (!targets.length) return fail(idx.list.length && kind === 'supplier' ? 'Choose a supplier.' : 'There are no suppliers to delete.');
+    const dropInv = [], dropTpl = [], logoIds = [], hold = [];
+    for (const s of targets) { s.invoices.forEach(i => dropInv.push(i.key)); s.layouts.forEach(t => dropTpl.push(t.id)); logoIds.push(s.id); hold.push(s.id); }
+    const plan = finish(Object.assign({}, blank, { dropInv, dropTpl, logoIds, hold }));
+    const who = kind === 'supplier' ? targets[0].name : 'all ' + noun(targets.length, 'supplier');
+    plan.detail = 'Delete ' + who + '. This also removes ' + noun(dropInv.length, 'invoice') + ', their ' + noun(countLines(targets.flatMap(s => s.invoices)), 'line item')
+      + ', ' + noun(dropTpl.length, 'saved layout') + ', and ' + (logoIds.length === 1 ? 'its logo' : 'their logos') + ' in the supplier-logos bucket.';
+    return plan;
+  }
+  if (kind === 'contacts') {
+    const withC = invs.filter(i => i.phone || i.email || i.website);
+    const tplC = tpls.filter(t => t.phone || t.email || t.website);
+    if (!withC.length && !tplC.length) return fail('No phone, email or website is stored.');
+    const plan = Object.assign({}, blank, { touchInv: withC.map(i => i.key), edit: 'contacts', editTpl: 'contacts', supGone: [] });
+    plan.detail = 'Clear the phone, email and website on ' + noun(withC.length, 'invoice') + ' and ' + noun(tplC.length, 'saved layout')
+      + '. The invoices, line items and layouts stay.';
+    return plan;
+  }
+  if (kind === 'prices') {
+    const n = countPriced(invs);
+    if (!n) return fail('No unit prices are stored, so the price history is already empty.');
+    const touch = invs.filter(i => (i.lines || []).some(L => typeof L.unit_price === 'number')).map(i => i.key);
+    const plan = Object.assign({}, blank, { touchInv: touch, edit: 'prices', supGone: [] });
+    plan.detail = 'Clear the unit price on ' + noun(n, 'line item') + ' across ' + noun(touch.length, 'invoice')
+      + '. The items and invoices stay, and the price history no longer has a price.';
+    return plan;
+  }
+  if (kind === 'layout' || kind === 'layouts') {
+    const targets = kind === 'layout' ? tpls.filter(t => t.id === which) : tpls.slice();
+    if (!targets.length) return fail(tpls.length && kind === 'layout' ? 'Choose a saved layout.' : 'There are no saved layouts to delete.');
+    const plan = finish(Object.assign({}, blank, { dropTpl: targets.map(t => t.id), hold: targets.map(t => idx.idOf(t.name, t.abn)) }));
+    const lead = kind === 'layout' ? 'Delete the saved layout for ' + targets[0].name + '.' : 'Delete all ' + noun(targets.length, 'saved layout') + '.';
+    plan.detail = lead + ' Invoices and logo files stay. The logo picture kept inside ' + (targets.length === 1 ? 'this layout' : 'these layouts') + ' is removed.'
+      + (plan.supGone.length ? ' ' + noun(plan.supGone.length, 'supplier') + ' with nothing else saved ' + (plan.supGone.length === 1 ? 'is' : 'are') + ' removed too.' : '');
+    return plan;
+  }
+  if (kind === 'logo' || kind === 'logos') {
+    const targets = kind === 'logo' ? idx.list.filter(s => s.id === which) : idx.list.slice();
+    if (!targets.length) return fail(idx.list.length && kind === 'logo' ? 'Choose a supplier.' : 'There is no supplier whose logo can be deleted.');
+    const plan = Object.assign({}, blank, { logoIds: targets.map(s => s.id), hold: targets.map(s => s.id), clearThumbs: true, listAllLogos: kind === 'logos', supGone: [] });
+    plan.detail = (kind === 'logo' ? 'Delete the logo for ' + targets[0].name + '.' : 'Delete every supplier logo.')
+      + ' This removes the file in the supplier-logos bucket and the logo picture saved on ' + (kind === 'logo' ? 'that supplier’s layout' : 'each layout')
+      + '. The supplier, invoices and layout stay.';
+    return plan;
+  }
+  if (kind === 'everything') {
+    if (!invs.length && !tpls.length && !idx.list.length) return fail('There is nothing stored to delete.');
+    const plan = finish(Object.assign({}, blank, {
+      dropInv: invs.map(i => i.key), dropTpl: tpls.map(t => t.id), logoIds: idx.list.map(s => s.id), hold: idx.list.map(s => s.id),
+      clearFlags: true, listAllLogos: true
+    }));
+    plan.detail = 'Delete everything stored for this kitchen: ' + noun(invs.length, 'invoice') + ' and their ' + noun(countLines(invs), 'line item')
+      + ', ' + noun(idx.list.length, 'supplier') + ', all contacts, all price history, ' + noun(tpls.length, 'saved layout')
+      + ', and every logo in the supplier-logos bucket. Ignored and hidden items go too. Staff accounts and folder settings stay.';
+    return plan;
+  }
+  return fail('Choose what to delete.');
+}
+function adminDelHtml() {
+  if (!Cloud.isAdmin()) return '';
+  const kinds = [
+    ['invoice', 'One invoice'], ['invoices', 'All invoices'], ['lines', 'Line items and records'],
+    ['supplier', 'One supplier'], ['suppliers', 'All suppliers'], ['contacts', 'Contacts'],
+    ['prices', 'Price history'], ['layout', 'One saved layout'], ['layouts', 'All saved layouts'],
+    ['logo', 'One supplier logo'], ['logos', 'All supplier logos'], ['everything', 'Everything']
+  ];
+  const opts = adminWhichOptions(AdminDel.kind);
+  if (adminNeedsWhich(AdminDel.kind) && !opts.some(o => o.id === AdminDel.which)) AdminDel.which = opts.length ? opts[0].id : '';
+  const plan = adminPlan(AdminDel.kind, AdminDel.which);
+  const dis = AdminDel.busy ? ' disabled' : '';
+  const kindSel = '<label class="field" for="admin-kind">What to delete<select id="admin-kind"' + dis + '>' + kinds.map(k => '<option value="' + k[0] + '"' + (AdminDel.kind === k[0] ? ' selected' : '') + '>' + esc(k[1]) + '</option>').join('') + '</select></label>';
+  const whichSel = adminNeedsWhich(AdminDel.kind) ? '<label class="field" for="admin-which">Which one<select id="admin-which"' + dis + '>' + (opts.length ? opts.map(o => '<option value="' + esc(o.id) + '"' + (AdminDel.which === o.id ? ' selected' : '') + '>' + esc(o.label) + '</option>').join('') : '<option value="">Nothing stored</option>') + '</select></label>' : '';
+  const confirm = AdminDel.step === 'confirm'
+    ? '<div class="confirm" role="alert"><p>' + esc(plan.detail) + '</p><div class="row"><button class="btn small danger" type="button" data-set="admin-go"' + dis + '>Delete this</button><button class="btn small" type="button" data-set="admin-back"' + dis + '>Back</button></div></div>'
+    : '<div class="row"><button class="btn small danger" type="button" data-set="admin-review"' + (dis || !plan.ok ? ' disabled' : '') + '>Review delete</button></div>' + (!plan.ok ? '<p class="note">' + esc(plan.reason) + '</p>' : '');
+  return '<div class="admindel">' + kindSel + whichSel + confirm +
+    '<p class="note">Only the signed-in admin can delete. Each delete is saved in this browser and in Supabase, including logo files, and a later sync will not bring it back.</p>' +
+    (AdminDel.msg ? '<p class="note" aria-live="polite">' + esc(hideKey(AdminDel.msg)) + '</p>' : '') + '</div>';
+}
+function renderAdminDel() { const b = $('#admin-del'); if (b) b.innerHTML = adminDelHtml(); }
+function releaseLibDocs(keys) {
+  const set = new Set(keys || []);
+  S.docs.forEach(d => { if (d.libKey && set.has(d.libKey)) { d.lib = false; d.libKey = null; d.libSig = ''; d.libState = 'off'; } });
+}
+async function adminLogoPaths(plan) {
+  const paths = [];
+  (plan.logoIds || []).forEach(id => { const p = Logos.path(id); if (p) paths.push(p); });
+  if (plan.listAllLogos && Cloud.ready() && Cloud.sb && Cloud.sb.storage) {
+    const { data, error } = await Cloud.sb.storage.from(LOGO_BUCKET).list('', { limit: 1000 });
+    if (error) throw error;
+    (data || []).forEach(f => { if (f && f.name && f.id) paths.push(f.name); });
+  }
+  return [...new Set(paths)];
+}
+async function adminRun(plan) {
+  const now = nowIso(), idOf = supplierIdFn();
+  if (plan.dropInv.length || (plan.touchInv && plan.touchInv.length) || plan.clearFlags) {
+    const drop = new Set(plan.dropInv), touch = new Set(plan.touchInv || []);
+    Lib.mutate(st => {
+      for (const k of drop) delete st.invoices[k];
+      if (plan.edit) for (const inv of Object.values(st.invoices)) {
+        if (!touch.has(inv.key)) continue;
+        if (plan.edit === 'lines') inv.lines = [];
+        else if (plan.edit === 'prices') (inv.lines || []).forEach(L => { delete L.unit_price; });
+        else if (plan.edit === 'contacts') { delete inv.phone; delete inv.email; delete inv.website; }
+        inv.updated = now;
+      }
+      if (plan.clearFlags) { st.hidden = {}; st.ignored = {}; }
+    });
+    releaseLibDocs(plan.dropInv.concat(plan.touchInv || []));
+  }
+  if (plan.editTpl === 'contacts' || plan.clearThumbs) {
+    const thumbs = new Set(plan.logoIds || []);
+    let ch = false;
+    S.templates = S.templates.map(t => {
+      const sid = idOf(t.name, t.abn);
+      let n = null;
+      if (plan.editTpl === 'contacts' && (t.phone || t.email || t.website)) n = Object.assign({}, t, { phone: '', email: '', website: '' });
+      if (plan.clearThumbs && t.logo && (plan.listAllLogos || thumbs.has(sid))) n = Object.assign({}, n || t, { logo: null });
+      if (!n) return t;
+      ch = true; n.updated = now; return cleanTpl(n);
+    });
+    if (ch) Store.saveLocal();
+  }
+  if (plan.dropTpl.length) {
+    const drop = new Set(plan.dropTpl);
+    const before = S.templates.length;
+    S.templates = S.templates.filter(t => !drop.has(t.id));
+    if (S.templates.length !== before) Store.saveLocal();
+    S.docs.forEach(d => { if (d.tplId && drop.has(d.tplId)) { d.tplId = null; d.tplWhy = []; } });
+  }
+  (plan.hold || []).forEach(id => { if (id) tplHold.add(id); });
+  (plan.supGone || []).forEach(id => { Cloud.meta.supGone = Cloud.meta.supGone || {}; Cloud.meta.supGone[id] = now; });
+  if ((plan.supGone || []).length) Cloud.saveMeta();
+  Logos.queueRemove(await adminLogoPaths(plan));
+  if (Cloud.ready()) await Cloud.syncNow();
+}
+async function adminAct(act) {
+  if (act === 'admin-back') { AdminDel.step = ''; AdminDel.msg = ''; renderAdminDel(); return; }
+  if (!Cloud.isAdmin()) { AdminDel.msg = 'Only an admin can delete.'; renderAdminDel(); return; }
+  const plan = adminPlan(AdminDel.kind, AdminDel.which);
+  if (!plan.ok) { AdminDel.step = ''; AdminDel.msg = plan.reason; renderAdminDel(); return; }
+  if (act === 'admin-review') { AdminDel.step = 'confirm'; AdminDel.msg = ''; renderAdminDel(); return; }
+  if (act !== 'admin-go' || AdminDel.busy) return;
+  AdminDel.busy = true; AdminDel.msg = 'Deleting…'; renderAdminDel();
+  try {
+    await adminRun(plan);
+    AdminDel.step = '';
+    AdminDel.msg = Cloud.state === 'error' ? (Cloud.err || 'Supabase could not finish the delete.') : 'Deleted. It stays gone after the next sync.';
+    toast(AdminDel.msg, Cloud.state === 'error' ? 'bad' : '');
+    renderAll();
+  } catch (e) {
+    AdminDel.msg = Cloud.say(e);
+    toast(AdminDel.msg, 'bad');
+  }
+  AdminDel.busy = false; renderAdminDel();
+}
+
 /* settings */
 function openSettings(note) {
   S.setNote = note || ''; renderSettings(''); $('#settings').hidden = false;
@@ -4688,6 +5073,7 @@ function renderSettings(msg) {
     '<p class="note">Every change is saved to Supabase while you are signed in. It also keeps working offline and catches up when the connection is back.</p>' +
     '<div id="sb-box">' + sbBoxHtml() + '</div>' +
     (Cloud.isAdmin() ? '<h3 class="sec">Staff</h3><div id="staff-box">' + staffBoxHtml() + '</div>' : '') +
+    (Cloud.isAdmin() ? '<h3 class="sec">Admin</h3><div id="admin-del">' + adminDelHtml() + '</div>' : '') +
     '<h3 class="sec">Invoice folder</h3>' + folder +
     (msg ? '<p class="note" aria-live="polite">' + hideKey(msg) + '</p>' : '') +
     '<div class="row"><button class="btn" type="button" data-set="close">Done</button></div></div>';
@@ -4698,6 +5084,7 @@ $('#settings').addEventListener('click', async e => {
   const act = b.dataset.set;
   if (act.startsWith('sb-')) return sbAct(act);
   if (act.startsWith('staff-')) return staffAct(act, b);
+  if (act.startsWith('admin-')) return adminAct(act);
   if (act === 'close') return closeSettings();
   if (act === 'folder-pick') { await pickFolder(); renderSettings(''); return; }
   if (act === 'folder-allow') { if (await Files.ready(true)) { Files.waiting = false; S.docs.forEach(queueFileSave); await flushFileSave(true); } renderSettings(''); renderAll(); return; }
@@ -4706,6 +5093,11 @@ $('#settings').addEventListener('click', async e => {
 $('#settings').addEventListener('change', e => {
   const t = e.target;
   if (t.id === 'sb-key' || t.id === 'staff-user' || t.id === 'staff-pass' || t.id === 'staff-newrole') return;
+  if (t.id === 'admin-kind' || t.id === 'admin-which') {
+    if (t.id === 'admin-kind') AdminDel.kind = t.value;
+    else AdminDel.which = t.value;
+    AdminDel.step = ''; AdminDel.msg = ''; renderAdminDel(); return;
+  }
   if (t.dataset.staffRole) { const email = t.dataset.staffRole; staffCall({ op: 'role', email, role: t.value }, email + ' is now ' + (t.value === 'admin' ? 'an admin' : 'staff') + '.'); return; }
   if (t.id === 'sb-url') {
     const v = t.value.trim().replace(/\/+$/, '');

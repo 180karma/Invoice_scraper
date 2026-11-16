@@ -41,6 +41,9 @@ as $$ select s.role from public.staff s where s.email = lower(coalesce((select a
 create or replace function private.is_staff() returns boolean
 language sql stable security definer set search_path = ''
 as $$ select private.staff_role() is not null $$;
+-- Role admin may delete. The page reads ADMIN_EMAILS and hides delete from every
+-- other signed-in account, including an admin whose email is not on that list.
+-- Postgres only checks the staff role. It cannot read ADMIN_EMAILS.
 create or replace function private.is_admin() returns boolean
 language sql stable security definer set search_path = ''
 as $$ select coalesce(private.staff_role() = 'admin', false) $$;
@@ -370,3 +373,10 @@ create policy "staff update supplier logos" on storage.objects
   for update to authenticated
   using (bucket_id = 'supplier-logos' and (select private.is_staff()))
   with check (bucket_id = 'supplier-logos' and (select private.is_staff()));
+
+-- Admins can delete logo files. remove() needs this DELETE policy (SELECT is already granted above).
+-- Paste this block on its own if logos will not delete, or re-run the whole file.
+drop policy if exists "admin delete supplier logos" on storage.objects;
+create policy "admin delete supplier logos" on storage.objects
+  for delete to authenticated
+  using (bucket_id = 'supplier-logos' and (select private.is_admin()));
