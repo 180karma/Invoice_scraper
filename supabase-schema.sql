@@ -4,11 +4,8 @@
 --
 -- Shared kitchen library: all signed-in staff sync the same rows.
 -- user_id on data tables is the kitchen library id from app_meta (not each person's auth uid).
--- Only emails in public.staff can use the library:
---   staff  view everything and add invoices, layouts and ignored items. They can also correct an
---          invoice they added themselves for 24 hours. Other edits and deletes are skipped.
---   admin  can also edit and delete anything, change shared settings, and manage staff
---          (through the staff-admin Edge Function).
+-- The page connects with the anon key and does not ask anyone to sign in.
+-- Anyone who can open the page can view, add, change and delete the kitchen library.
 -- updated_at is set by the app from its local edit time, so devices merge newest-wins.
 -- deleted = true is a tombstone: it tells other devices a row was removed.
 
@@ -33,7 +30,7 @@ insert into public.staff (email, role) values ('180karma@gmail.com', 'admin') on
 -- role helpers for the policies, in a schema the REST API does not expose
 create schema if not exists private;
 revoke all on schema private from public, anon;
-grant usage on schema private to authenticated;
+grant usage on schema private to anon, authenticated;
 create or replace function private.staff_role() returns text
 language sql stable security definer set search_path = ''
 as $$ select s.role from public.staff s where s.email = lower(coalesce((select auth.jwt()) ->> 'email', '')) $$;
@@ -48,6 +45,7 @@ language sql stable security definer set search_path = ''
 as $$ select value::uuid from public.app_meta where key = 'library_user_id' $$;
 revoke execute on function private.staff_role(), private.is_staff(), private.is_admin(), private.kitchen_library_id() from public, anon;
 grant execute on function private.staff_role(), private.is_staff(), private.is_admin(), private.kitchen_library_id() to authenticated;
+grant execute on function private.kitchen_library_id() to anon;
 
 alter table public.staff enable row level security;
 drop policy if exists "staff read" on public.staff;
@@ -321,8 +319,27 @@ create trigger guard before insert or update or delete on public.suppliers for e
 drop trigger if exists guard on public.ignored_items;
 create trigger guard before insert or update or delete on public.ignored_items for each row execute function public.guard_ignored();
 revoke execute on function public.guard_invoices(), public.guard_line_items(), public.guard_tombstones(), public.guard_ignored() from public, anon, authenticated;
-revoke all on public.price_history from anon;
-grant select on public.price_history to authenticated;
+
+-- the page syncs with the anon key and does not sign in; anon may use the kitchen library the same way an admin can
+do $$
+declare t text;
+begin
+  foreach t in array array['suppliers', 'layouts', 'invoices', 'line_items', 'ignored_items', 'settings'] loop
+    execute format('drop policy if exists "kitchen library anon select" on public.%I', t);
+    execute format('drop policy if exists "kitchen library anon insert" on public.%I', t);
+    execute format('drop policy if exists "kitchen library anon update" on public.%I', t);
+    execute format('drop policy if exists "kitchen library anon delete" on public.%I', t);
+    execute format('create policy "kitchen library anon select" on public.%I for select to anon using (user_id = (select private.kitchen_library_id()))', t);
+    execute format('create policy "kitchen library anon insert" on public.%I for insert to anon with check (user_id = (select private.kitchen_library_id()))', t);
+    execute format('create policy "kitchen library anon update" on public.%I for update to anon using (user_id = (select private.kitchen_library_id())) with check (user_id = (select private.kitchen_library_id()))', t);
+    execute format('create policy "kitchen library anon delete" on public.%I for delete to anon using (user_id = (select private.kitchen_library_id()))', t);
+    execute format('grant select, insert, update, delete on public.%I to anon', t);
+  end loop;
+end $$;
+drop policy if exists "app_meta anon read" on public.app_meta;
+create policy "app_meta anon read" on public.app_meta for select to anon using (true);
+grant select on public.app_meta to anon;
+grant select on public.price_history to anon, authenticated;
 
 -- an earlier version of this file put the role helpers in public, where the REST API could call them
 drop function if exists public.is_admin();

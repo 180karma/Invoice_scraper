@@ -8,15 +8,10 @@ Drop in supplier invoices (PDF or image) to extract line items, header fields, a
 
 ## Shared kitchen library
 
-Signed-in staff share **one** Supabase library (invoices, items, layouts, settings). The library id lives in `app_meta.library_user_id` (created by [`supabase-schema.sql`](supabase-schema.sql)); the page loads it after sign-in and syncs every account to that id.
+The page connects with the project's anon key and does **not** ask anyone to sign in. Every device shares **one** Supabase library (invoices, items, layouts, settings), and every change is saved on its own.
 
-- Run `supabase-schema.sql` once in the Supabase SQL editor (safe to re-run). It creates the `staff` list and makes `180karma@gmail.com` the first admin; change that line for another kitchen.
-- The page opens on a sign-in screen. Only emails on the staff list can sign in; they get a code by email.
-- **Staff** see the whole library and add invoices to it with the invoice reader. They can correct an invoice they added themselves for 24 hours. They can't change or delete anything else.
-- **Admins** can also change and delete library records, hide items, change shared settings, and add or remove people under Settings → Staff.
-- The staff list is managed by the Edge Function `supabase/functions/staff-admin`. Supabase gives it the service key, which never reaches the browser. Adding someone also creates their sign-in account, and removing them deletes it.
-- The limits are enforced in the database by row-level security and triggers, not only by hiding buttons.
-- The Email provider must be enabled under Authentication → Sign In / Providers. Turning off “Allow new users to sign up” there is recommended. The page never signs people up by itself.
+- Run `supabase-schema.sql` once in the Supabase SQL editor (safe to re-run).
+- Anyone who opens the page can view, add, change and delete the library. The staff list is no longer used for access.
 
 ## Keys
 

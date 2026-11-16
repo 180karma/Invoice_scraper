@@ -3342,14 +3342,14 @@ function renderLibrary() {
     (Cloud.limited() ? '' : '<button class="btn small danger" type="button" data-act="lib-clear"' + off + '>' + (L.armed ? 'Tap again to delete everything' : 'Clear library') + '</button>') + '</div>' +
     (a.hidden ? '<p class="note">' + a.hidden + ' item' + pl(a.hidden) + ' hidden.' + (Cloud.limited() ? '' : ' <button class="link" type="button" data-act="lib-unhide">Show ' + (a.hidden === 1 ? 'it' : 'them') + ' again</button>') + '</p>' : '') +
     (a.ignored ? '<p class="note">' + a.ignored + ' item' + pl(a.ignored) + ' ignored on new invoices. <button class="link" type="button" data-act="lib-unignore">Scan ' + (a.ignored === 1 ? 'it' : 'them') + ' again</button></p>' : '') +
-    (Cloud.user ? '<p class="note">The library lives in this browser and is copied to the shared kitchen library in Supabase (signed in as ' + esc(Cloud.user.email || 'this account') + '). Everyone on the staff list sees the same invoices and items and can add to them' + (Cloud.limited() ? '; only an admin can change or delete records already here.' : '; admins can also change and delete them.') + '</p>'
+    (Cloud.ready() ? '<p class="note">The library lives in this browser and is copied to Supabase automatically. Every device that opens this page sees the same invoices and items.</p>'
       : '<p class="note">The library lives in this browser’s local storage on this device. Another browser or device starts empty, and clearing site data erases it, so take a backup now and then, or turn on the Supabase copy in Settings.</p>');
   syncCopyTableBtn();
 }
 // sends everything in this browser's local storage up, then loads the merged copy back
 async function libUpload() {
   if (S.lib.uploading) return;
-  if (!Cloud.ready()) { toast('Sign in to Supabase first (Settings, Supabase copy).', 'bad'); return; }
+  if (!Cloud.ready()) { toast('Supabase is not connected yet.', 'bad'); return; }
   flushSync();
   const n = Object.keys(Lib.store.invoices).length, t = S.templates.length;
   S.lib.uploading = true; renderLibrary();
@@ -3605,7 +3605,7 @@ const Gem = {
   blocked: false, noUse: {}, queue: [], running: false,
   // the gemini-extract Edge Function holds the key in Supabase; null until tried, false when it can't scan
   server: null, serverWhy: '',
-  viaServer() { return Cloud.ready() && this.server !== false; },
+  viaServer() { return !!(Cloud.ready() && Cloud.user && Cloud.role && this.server !== false); },
   can() { return this.viaServer() || !!this.key; },
   load() {
     try {
@@ -3681,8 +3681,7 @@ async function gemCall(model, body, signal) {
 }
 const gemVia = () => Gem.viaServer() ? 'server' : 'key';
 function gemNeed() {
-  if (!Cloud.key) return 'Add a Gemini API key.';
-  if (!Cloud.user) return 'Sign in under Supabase copy to scan with the Gemini key kept in Supabase.';
+  if (!Gem.key) return 'Add a Gemini API key in Settings to scan pictures.';
   return gemErr({ code: 'server_off', via: 'server', why: Gem.serverWhy }) + ' Or add a Gemini API key to this browser.';
 }
 // which models this key may use; "newest" is read from Google's own list, so it keeps up with new releases
@@ -4072,7 +4071,7 @@ const Cloud = {
   save() { try { localStorage.setItem(this.KEY, JSON.stringify({ url: this.ownUrl, urlSet: !!this.ownUrl, key: this.ownKey })); } catch (e) {} },
   saveQ() { try { localStorage.setItem(this.QKEY, JSON.stringify(this.dirty)); } catch (e) {} },
   saveMeta() { try { localStorage.setItem(this.MKEY, JSON.stringify(this.meta)); } catch (e) {} },
-  ready() { return !!(this.sb && this.user && this.role); },
+  ready() { return !!this.sb; },
   watching() { return this.loaded && !!this.key && !this.applying; },
   pending() { return Object.keys(this.dirty).length; },
 
@@ -4133,51 +4132,36 @@ const Cloud = {
         const lib = await this.lib();
         const sb = this.sb = lib.createClient(this.url, this.key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit', storageKey: 'invoice-scraper.supabase-auth' } });
         // a client replaced by a new key or project URL must not sign the new one out
-        sb.auth.onAuthStateChange((ev, session) => { setTimeout(() => { if (this.sb === sb) this.authed(session); }, 0); });
-        const r = await sb.auth.getSession();
+        // an old email sign-in must not be used: the page syncs with the anon key
+        sb.auth.onAuthStateChange(() => { setTimeout(() => { if (this.sb === sb) this.authed(null); }, 0); });
+        try { await sb.auth.signOut({ scope: 'local' }); } catch (e) {}
         if (/access_token|error_description/.test(location.hash) || /#$/.test(location.href)) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }
         if (this.sb !== sb) return false;
         if (linkErr) this.linkFailed(linkErr);
-        this.authed(r && r.data ? r.data.session : null);
+        this.authed(null);
         return true;
-      } catch (e) { this.sb = null; this.booted = true; this.setState(navigator.onLine ? 'error' : 'offline', this.say(e)); renderGate(); return false; }
+      } catch (e) { this.sb = null; this.booted = true; this.setState(navigator.onLine ? 'error' : 'offline', this.say(e)); return false; }
       finally { this.connecting = null; }
     })();
     return this.connecting;
   },
-  authed(session) {
-    const u = session && session.user ? { id: session.user.id, email: session.user.email || '' } : null;
-    this.booted = true;
-    if ((u && u.id) === (this.user && this.user.id) && (!u || this.checked)) { renderGate(); return; }
-    this.user = u; this.role = null; this.checked = false; this.libraryId = null; Gem.server = null; Gem.serverWhy = '';
-    if (!u) { this.setState('off'); renderSb(); return; }
-    this.sentTo = ''; this.gateMsg = ''; renderSb(/^(Key saved|To finish signing in)/.test(this.msg) ? '' : null);
-    this.recheck();
-  },
-  // only people on the staff list get past the sign-in screen and sync
-  recheck() {
-    if (!this.user || !this.sb) return Promise.resolve(false);
-    const u = this.user;
-    this.setState('syncing', ''); renderGate();
-    return this.queue(async () => {
-      await this.loadRole();
-      if (!this.role) return false;
+  authed() {
+    this.booted = true; this.user = null; this.role = null; this.checked = true;
+    if (this.opened) { renderSb(); return; }
+    this.opened = true;
+    this.setState('syncing', '');
+    this.queue(async () => {
       await this.ensureLibraryId();
       if (this.meta.uid !== this.libraryId) {
-        const keep = { flagAt: this.meta.flagAt, setAt: this.meta.setAt, setSig: this.meta.setSig, folders: this.meta.folders, role: this.meta.role, roleEmail: this.meta.roleEmail };
+        const keep = { flagAt: this.meta.flagAt, setAt: this.meta.setAt, setSig: this.meta.setSig, folders: this.meta.folders };
         this.meta = Object.assign(this.freshMeta(), keep, { uid: this.libraryId });
         this.saveMeta();
       }
-      return true;
-    }).then(ok => {
-      if (this.user !== u) return false;
-      if (!ok) this.setState('off');
+    }).then(() => {
       renderSb(); renderAll();
-      // the first sign-in on a browser that already holds data sends all of it up without being asked
-      if (ok && !this.meta.uploadedAt && (Object.keys(Lib.store.invoices).length || S.templates.length)) this.uploadAll().then(() => this.syncNow());
-      else if (ok) this.syncNow();
-      return ok;
-    }, e => { this.fail(e); renderSb(); return false; });
+      if (!this.meta.uploadedAt && (Object.keys(Lib.store.invoices).length || S.templates.length)) this.uploadAll().then(() => this.syncNow());
+      else this.syncNow();
+    }, e => { this.fail(e); renderSb(); });
   },
   linkFailed(desc) {
     const m = /expired|invalid/i.test(desc) ? 'That sign-in link has expired or was already used. Some email apps open links to check them, which uses them up. Send a new email and open the link once.'
@@ -4186,7 +4170,7 @@ const Cloud = {
   },
   async disconnect() {
     clearTimeout(this.timer);
-    const sb = this.sb; this.sb = null; this.user = null; this.role = null; this.checked = false; this.libraryId = null; this.setState('off');
+    const sb = this.sb; this.sb = null; this.user = null; this.role = null; this.checked = false; this.opened = false; this.libraryId = null; this.setState('off');
     if (sb) { try { await sb.auth.signOut({ scope: 'local' }); } catch (e) {} }
   },
 
@@ -4203,8 +4187,8 @@ const Cloud = {
     if (/shared kitchen library is not set up|app_meta/i.test(m)) return 'The shared kitchen library is not set up. Run supabase-schema.sql in the Supabase SQL editor.';
     if (/invalid api key|no api key|apikey/i.test(m)) return 'Supabase did not accept the key. Check it is the anon or publishable key for this project.';
     if (/relation .* does not exist|could not find the table|schema cache/i.test(m)) return 'The tables are not set up in Supabase yet. Run supabase-schema.sql in its SQL editor.';
-    if (/row-level security|violates row-level|permission denied/i.test(m)) return 'Supabase refused the write. Sign out and in again, then check the schema was run.';
-    if (/jwt|token.*expired|not authenticated/i.test(m)) return 'The sign-in has expired. Sign in again.';
+    if (/row-level security|violates row-level|permission denied/i.test(m)) return 'Supabase refused the write. Run supabase-schema.sql in its SQL editor.';
+    if (/jwt|token.*expired|not authenticated/i.test(m)) return 'Supabase did not accept the connection. Reload the page.';
     return hideKey(m).slice(0, 200);
   },
   // why a sign-in email was not sent, in the words of the Supabase setting to change
@@ -4429,7 +4413,7 @@ const Cloud = {
 function renderSyncPill() {
   const b = $('#syncPill'); if (!b) return;
   const C = Cloud;
-  if (!C.key || (!C.user && C.state !== 'error' && C.state !== 'offline')) { b.hidden = !C.key || !C.loaded; b.className = 'pill syncpill'; b.textContent = 'Sign in to sync'; b.title = 'Sign in to copy your data to Supabase'; }
+  if (!C.key) { b.hidden = !C.loaded; b.className = 'pill syncpill'; b.textContent = 'Not connected'; b.title = 'Supabase is not set up'; }
   else {
     const map = { synced: ['good', 'Synced'], syncing: ['', 'Syncing'], offline: ['warn', 'Offline'], error: ['bad', 'Sync error'], off: ['', 'Syncing'] }, v = map[C.state] || map.off;
     b.hidden = false; b.className = 'pill syncpill' + (v[0] ? ' ' + v[0] : ''); b.textContent = v[1];
@@ -4439,7 +4423,7 @@ function renderSyncPill() {
 }
 function sbStateHtml() {
   const C = Cloud, n = C.pending();
-  if (!C.user) return '';
+  if (!C.key) return '';
   const v = { synced: ['good', 'Synced'], syncing: ['', 'Syncing…'], offline: ['warn', 'Offline: ' + n + ' change' + pl(n) + ' waiting'], error: ['bad', 'Sync error'] }[C.state] || ['', 'Connecting…'];
   return '<span class="pill ' + v[0] + '">' + esc(v[1]) + '</span>' + (C.state === 'error' && C.err ? ' <span class="note">' + esc(hideKey(C.err)) + '</span>' : '');
 }
@@ -4453,23 +4437,12 @@ function sbBoxHtml() {
     : '<div class="row"><input id="sb-key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="' + (C.key ? 'Paste the new key' : 'Paste the anon or publishable key') + '" aria-describedby="sb-keynote"><button class="btn small primary" type="button" data-set="sb-savekey" disabled>Save key</button>' +
       (C.key ? '<button class="btn small" type="button" data-set="sb-cancelkey">Cancel</button>' : '') + '</div>';
   let acct = '';
-  if (C.key && C.user && C.checked && !C.role) {
-    acct = '<div class="keysaved sbwho"><span><b>' + esc(C.user.email || 'This account') + '</b> is not on the kitchen staff list.</span><button class="btn small" type="button" data-set="sb-signout">Sign out</button></div>';
-  } else if (C.key && C.user) {
-    acct = '<div class="keysaved sbwho"><span>Signed in as <b>' + esc(C.user.email || 'this account') + '</b>' + (C.role ? ' (' + (C.isAdmin() ? 'admin' : 'staff') + ')' : '') + '</span><button class="btn small" type="button" data-set="sb-signout">Sign out</button></div>' +
-      '<p class="row" id="sb-state">' + sbStateHtml() + '</p>' +
+  if (C.key) {
+    acct = '<p class="row" id="sb-state">' + sbStateHtml() + '</p>' +
       '<div class="row"><button class="btn small' + (C.meta.uploadedAt ? '' : ' primary') + '" type="button" data-set="sb-upload">' + (C.meta.uploadedAt ? 'Upload everything again' : 'Upload existing data') + '</button><button class="btn small" type="button" data-set="sb-pull">Load from Supabase</button></div>' +
-      '<p class="note">' + (C.meta.uploadedAt ? 'Everything in this browser was uploaded on ' + esc(niceDate(C.meta.uploadedAt.slice(0, 10))) + '. ' : 'Upload existing data copies the library, layouts, ignored items and settings already in this browser. ') + 'After that, every change is copied in the background, and this page loads the newest copy when it opens.</p>';
-  } else if (C.key && C.sentTo) {
-    acct = '<p class="note">We sent a sign-in email to <b>' + esc(C.sentTo) + '</b>. Open the link in it on this device, in this browser. If the email shows a code, you can type it here instead.' +
-      (/^https?:/.test(location.protocol) ? ' If the link opens localhost or a page that can’t be reached, set the Site URL in Supabase (Authentication, URL Configuration) to this page’s address, add it under Redirect URLs, then send a new email.' : '') + '</p>' +
-      '<div class="row"><input id="sb-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="Code from the email" aria-label="Code from the email"><button class="btn small primary" type="button" data-set="sb-verify">Sign in</button><button class="btn small" type="button" data-set="sb-again">Use another email</button></div>';
-  } else if (C.key) {
-    acct = '<div class="row"><input id="sb-email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com" value="' + esc(C.email || '') + '" aria-label="Email to sign in with"><button class="btn small primary" type="button" data-set="sb-send">Email me a sign-in link</button></div>' +
-      '<p class="note">Only emails on the kitchen staff list can sign in. Everyone signed in sees the same library and can add invoices to it.</p>';
+      '<p class="note">No sign-in. Every change is saved to Supabase on its own, and this page loads the newest copy when it opens.' + (C.meta.uploadedAt ? ' Everything in this browser was uploaded on ' + esc(niceDate(C.meta.uploadedAt.slice(0, 10))) + '.' : '') + '</p>';
   }
-  const where = !S.standalone ? '<p class="pill warn">Inside Claude this page can’t reach Supabase. Sync works in your own copy of the page: the invoice_scraper.html file on your own site, or opened in Chrome, Edge or Safari.</p>'
-    : location.protocol === 'file:' && C.key && !C.user ? '<p class="note">This page is opened from a file, so a sign-in link can’t come back to it. Open the page from its web address to sign in with the link, or type the code from the email.</p>' : '';
+  const where = !S.standalone ? '<p class="pill warn">Inside Claude this page can’t reach Supabase. Sync works in your own copy of the page: the invoice_scraper.html file on your own site, or opened in Chrome, Edge or Safari.</p>' : '';
   if (C.keyFrom === 'env') return where + acct + msg;
   return where + urlRow + '<div class="field"><label for="sb-key">Anon or publishable key</label>' + keyBox +
     '<p class="note" id="sb-keynote">' + (C.keyFrom === 'env' && !C.keyEdit ? 'This site was published with its Supabase key, so there is nothing to paste. ' : '') + 'In Supabase: Project Settings, API Keys. Use the <b>anon</b> or <b>publishable</b> key, never the service_role or secret key. Once saved it is never shown again.</p></div>' + acct + msg;
@@ -4493,35 +4466,13 @@ async function sbAct(act) {
   const C = Cloud;
   if (act === 'sb-replace') { C.keyEdit = true; renderSb(''); const k = $('#sb-key'); if (k) k.focus(); return; }
   if (act === 'sb-cancelkey') { C.keyEdit = false; renderSb(''); return; }
-  if (act === 'sb-savekey') { const k = $('#sb-key'), v = k ? k.value.trim() : ''; if (k) k.value = ''; if (v && sbSetKey(v)) renderSb('Key saved. Now sign in with your email.'); return; }
+  if (act === 'sb-savekey') { const k = $('#sb-key'), v = k ? k.value.trim() : ''; if (k) k.value = ''; if (v && sbSetKey(v)) renderSb('Key saved. Changes will be copied to Supabase.'); return; }
   if (act === 'sb-forget') {
     await C.disconnect(); C.ownKey = ''; C.keyEdit = false; C.sentTo = ''; C.pick(); C.save();
-    if (C.key) { renderSb('Your key was removed. Using the key this site was published with; sign in again.'); await C.connect(); renderSb(); }
+    if (C.key) { renderSb('Your key was removed. Using the key this site was published with.'); await C.connect(); renderSb(); }
     else renderSb('Key removed. The data in this browser is kept.');
     return;
   }
-  if (act === 'sb-send') {
-    const e = $('#sb-email'), email = e ? e.value.trim() : ''; C.email = email;
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { renderSb('Type the email address to sign in with.'); return; }
-    renderSb('Sending…');
-    if (!(await C.connect())) { renderSb(C.err || 'Supabase could not be reached.'); return; }
-    const redirect = /^https?:/.test(location.protocol) ? location.origin + location.pathname : undefined;
-    try {
-      const { error } = await C.sb.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo: redirect } });
-      if (error) throw error;
-      C.sentTo = email; renderSb('');
-    } catch (err) { renderSb(C.sayAuth(err)); }
-    return;
-  }
-  if (act === 'sb-verify') {
-    const c = $('#sb-code'), token = c ? c.value.replace(/\s/g, '') : '';
-    if (!/^\d{6,10}$/.test(token)) { renderSb('Type the code from the email.'); return; }
-    try { const { data, error } = await C.sb.auth.verifyOtp({ email: C.sentTo, token, type: 'email' }); if (error) throw error; C.authed(data && data.session); renderSb('Signed in.'); }
-    catch (err) { renderSb(/expired|invalid/i.test(String(err && err.message)) ? 'That code is wrong or has expired. Ask for a new email.' : C.say(err)); }
-    return;
-  }
-  if (act === 'sb-again') { C.sentTo = ''; renderSb(''); return; }
-  if (act === 'sb-signout') { await signOutAll(); renderSb('Signed out.'); return; }
   if (act === 'sb-pull') { renderSb('Loading from Supabase…'); await C.syncNow(); renderSb(C.state === 'synced' ? 'Up to date with Supabase.' : ''); return; }
   if (act === 'sb-upload') {
     renderSb('Uploading…');
@@ -4538,7 +4489,7 @@ async function signOutAll() {
 }
 
 /* sign-in screen: with a Supabase key, the page opens only for people on the staff list */
-function gateShown() { return S.standalone && !!Cloud.key && !(Cloud.user && Cloud.role) && !Cloud.offlinePass(); }
+function gateShown() { return false; }
 function gateHtml() {
   const C = Cloud, msg = C.gateMsg ? '<p class="note" aria-live="polite">' + esc(hideKey(C.gateMsg)) + '</p>' : '';
   const down = C.state === 'error' || C.state === 'offline';
@@ -4590,7 +4541,7 @@ async function gateAct(act) {
     return;
   }
   if (act === 'again') { C.sentTo = ''; return say(''); }
-  if (act === 'retry') { C.gateMsg = ''; if (!C.sb) await C.connect(); else await C.recheck(); renderGate(true); return; }
+  if (act === 'retry') { C.gateMsg = ''; await C.connect(); renderGate(true); return; }
   if (act === 'signout') { await signOutAll(); return say(''); }
 }
 $('#gate').addEventListener('click', e => { const b = e.target.closest('button[data-gate]'); if (b && !b.disabled) gateAct(b.dataset.gate); });
@@ -4641,14 +4592,14 @@ function staffAct(act, b) {
     clearTimeout(staffAct.t); staffCall({ op: 'remove', email }, email + ' was removed.');
   }
 }
-window.addEventListener('online', () => { if (Gem.server === false && Gem.serverWhy === 'network') Gem.server = null; if (Cloud.ready()) Cloud.syncNow(); else if (Cloud.key && !Cloud.sb) Cloud.connect(); else if (Cloud.user && !Cloud.checked) Cloud.recheck(); });
-window.addEventListener('offline', () => { if (Cloud.user) Cloud.setState('offline', ''); });
+window.addEventListener('online', () => { if (Gem.server === false && Gem.serverWhy === 'network') Gem.server = null; if (Cloud.ready()) Cloud.syncNow(); else if (Cloud.key && !Cloud.sb) Cloud.connect(); });
+window.addEventListener('offline', () => { if (Cloud.sb) Cloud.setState('offline', ''); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && Cloud.ready() && Date.now() - sbTime(Cloud.meta.pulledAt) > 300000) Cloud.syncNow(); });
 
 /* settings */
 function openSettings(note) {
   S.setNote = note || ''; renderSettings(''); $('#settings').hidden = false;
-  setTimeout(() => { const k = $(Gem.can() ? '#g-model' : Cloud.key && !Cloud.user ? '#sb-email' : '#g-key'); if (k) k.focus(); }, 30);
+  setTimeout(() => { const k = $(Gem.can() ? '#g-model' : '#g-key'); if (k) k.focus(); }, 30);
   if (Files.dir) { const was = Files.perm; Files.ready(false).then(() => { if (Files.perm !== was && !$('#settings').hidden) renderSettings(''); }); }
 }
 function closeSettings() {
@@ -4682,7 +4633,7 @@ function renderSettings(msg) {
   $('#settings').innerHTML = '<div class="card"><h2 id="setTitle">Settings<button class="iconbtn" type="button" data-set="close" aria-label="Close settings">&times;</button></h2>' +
     (S.setNote ? '<p class="pill warn">' + esc(S.setNote) + '</p>' : '') +
     '<h3 class="sec">Supabase copy</h3>' +
-    '<p class="note">' + (Cloud.keyFrom === 'env' ? 'Every change is saved to Supabase automatically while you are signed in, and other devices load it from there. It also keeps working offline and catches up when the connection is back.' : 'Everything stays in this browser and works offline. With a key and a sign-in, each change is also copied to your Supabase project, and other devices load it from there.') + '</p>' +
+    '<p class="note">' + (Cloud.keyFrom === 'env' ? 'Every change is saved to Supabase automatically. No sign-in. It also keeps working offline and catches up when the connection is back.' : 'Everything stays in this browser and works offline. With a key, each change is also copied to your Supabase project, and other devices load it from there.') + '</p>' +
     '<div id="sb-box">' + sbBoxHtml() + '</div>' +
     (Cloud.isAdmin() ? '<h3 class="sec">Staff</h3><div id="staff-box">' + staffBoxHtml() + '</div>' : '') +
     '<h3 class="sec">Invoice folder</h3>' + folder +
@@ -4702,7 +4653,7 @@ function renderSettings(msg) {
 // the key behind the Supabase route stays in Supabase secrets; this only says which route scans use
 function gemViaHtml() {
   if (!Cloud.key) return '';
-  if (!Cloud.user) return '<p class="note">Sign in under Supabase copy above to scan with the Gemini key kept in your Supabase project. It never comes to this page.</p>';
+  if (!Gem.key) return '<p class="note">Add a Gemini API key below to scan pictures. The key stays in this browser.</p>';
   if (Gem.server === false) return '<p class="pill warn">' + esc(gemErr({ code: 'server_off', via: 'server', why: Gem.serverWhy })) + (Gem.key ? ' Using the key saved in this browser for now.' : '') + '</p>';
   return '<p class="pill good">' + (Gem.server ? 'Scans go through your Supabase project' : 'Scans will go through your Supabase project') + '</p>' +
     '<p class="note">The Gemini key is kept in Supabase and never comes to this page.' + (Gem.key ? ' A key is also saved in this browser; it is used only if Supabase can’t scan. You can Forget it below.' : '') + '</p>';
@@ -4742,7 +4693,7 @@ $('#settings').addEventListener('change', e => {
   if (t.id === 'sb-url') {
     const v = t.value.trim().replace(/\/+$/, '');
     if (!/^https:\/\/[\w.\-]+(:\d+)?$/.test(v)) { t.value = Cloud.url; renderSb('The project URL looks like https://your-project.supabase.co'); return; }
-    if (v !== Cloud.url) { Cloud.ownUrl = v === SB_HOME ? '' : v; Cloud.pick(); Cloud.save(); Cloud.disconnect().then(() => Cloud.key && Cloud.connect()).then(() => renderSb()); renderSb('Project URL saved. Sign in again for this project.'); }
+    if (v !== Cloud.url) { Cloud.ownUrl = v === SB_HOME ? '' : v; Cloud.pick(); Cloud.save(); Cloud.disconnect().then(() => Cloud.key && Cloud.connect()).then(() => renderSb()); renderSb('Project URL saved.'); }
     return;
   }
   if (t.id === 'g-remember') { Gem.remember = t.checked; Gem.save(); }
