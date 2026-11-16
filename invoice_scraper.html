@@ -3342,14 +3342,14 @@ function renderLibrary() {
     (Cloud.limited() ? '' : '<button class="btn small danger" type="button" data-act="lib-clear"' + off + '>' + (L.armed ? 'Tap again to delete everything' : 'Clear library') + '</button>') + '</div>' +
     (a.hidden ? '<p class="note">' + a.hidden + ' item' + pl(a.hidden) + ' hidden.' + (Cloud.limited() ? '' : ' <button class="link" type="button" data-act="lib-unhide">Show ' + (a.hidden === 1 ? 'it' : 'them') + ' again</button>') + '</p>' : '') +
     (a.ignored ? '<p class="note">' + a.ignored + ' item' + pl(a.ignored) + ' ignored on new invoices. <button class="link" type="button" data-act="lib-unignore">Scan ' + (a.ignored === 1 ? 'it' : 'them') + ' again</button></p>' : '') +
-    (Cloud.ready() ? '<p class="note">The library lives in this browser and is copied to Supabase automatically. Every device that opens this page sees the same invoices and items.</p>'
+    (Cloud.ready() ? '<p class="note">The library lives in this browser and is copied to Supabase (signed in as ' + esc((Cloud.user && Cloud.user.name) || 'this account') + '). Everyone signed in sees the same invoices and items.</p>'
       : '<p class="note">The library lives in this browser’s local storage on this device. Another browser or device starts empty, and clearing site data erases it, so take a backup now and then, or turn on the Supabase copy in Settings.</p>');
   syncCopyTableBtn();
 }
 // sends everything in this browser's local storage up, then loads the merged copy back
 async function libUpload() {
   if (S.lib.uploading) return;
-  if (!Cloud.ready()) { toast('Supabase is not connected yet.', 'bad'); return; }
+  if (!Cloud.ready()) { toast('Sign in first.', 'bad'); return; }
   flushSync();
   const n = Object.keys(Lib.store.invoices).length, t = S.templates.length;
   S.lib.uploading = true; renderLibrary();
@@ -3970,6 +3970,18 @@ function sbSafe(v) {
   return v;
 }
 const sbHashErr = h => { try { return new URLSearchParams(String(h || '').replace(/^#/, '')).get('error_description') || ''; } catch (e) { return ''; } };
+// Supabase accounts are email-shaped. A username becomes name@users.invoice.local, which is never sent an email.
+const USER_MAIL = 'users.invoice.local';
+function userMail(name) {
+  const u = String(name || '').trim().toLowerCase();
+  return /^[a-z][a-z0-9._-]{0,31}$/.test(u) ? u + '@' + USER_MAIL : '';
+}
+function userLabel(email) {
+  const e = String(email || '').toLowerCase();
+  if (!e.endsWith('@' + USER_MAIL)) return e || 'this account';
+  const u = e.slice(0, e.length - USER_MAIL.length - 1);
+  return u ? u.charAt(0).toUpperCase() + u.slice(1) : e;
+}
 // '' when the key may be used, 'secret' for a service_role or secret key, 'bad' for anything else
 function sbKeyProblem(k) {
   if (/^sb_secret_/i.test(k)) return 'secret';
@@ -4071,7 +4083,7 @@ const Cloud = {
   save() { try { localStorage.setItem(this.KEY, JSON.stringify({ url: this.ownUrl, urlSet: !!this.ownUrl, key: this.ownKey })); } catch (e) {} },
   saveQ() { try { localStorage.setItem(this.QKEY, JSON.stringify(this.dirty)); } catch (e) {} },
   saveMeta() { try { localStorage.setItem(this.MKEY, JSON.stringify(this.meta)); } catch (e) {} },
-  ready() { return !!this.sb; },
+  ready() { return !!(this.sb && this.user && this.role); },
   watching() { return this.loaded && !!this.key && !this.applying; },
   pending() { return Object.keys(this.dirty).length; },
 
@@ -4132,35 +4144,44 @@ const Cloud = {
         const lib = await this.lib();
         const sb = this.sb = lib.createClient(this.url, this.key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit', storageKey: 'invoice-scraper.supabase-auth' } });
         // a client replaced by a new key or project URL must not sign the new one out
-        // an old email sign-in must not be used: the page syncs with the anon key
-        sb.auth.onAuthStateChange(() => { setTimeout(() => { if (this.sb === sb) this.authed(null); }, 0); });
-        try { await sb.auth.signOut({ scope: 'local' }); } catch (e) {}
+        sb.auth.onAuthStateChange((ev, session) => { setTimeout(() => { if (this.sb === sb) this.authed(session); }, 0); });
+        const r = await sb.auth.getSession();
         if (/access_token|error_description/.test(location.hash) || /#$/.test(location.href)) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }
         if (this.sb !== sb) return false;
         if (linkErr) this.linkFailed(linkErr);
-        this.authed(null);
+        this.authed(r && r.data ? r.data.session : null);
         return true;
-      } catch (e) { this.sb = null; this.booted = true; this.setState(navigator.onLine ? 'error' : 'offline', this.say(e)); return false; }
+      } catch (e) { this.sb = null; this.booted = true; this.setState(navigator.onLine ? 'error' : 'offline', this.say(e)); renderGate(); return false; }
       finally { this.connecting = null; }
     })();
     return this.connecting;
   },
-  authed() {
-    this.booted = true; this.user = null; this.role = null; this.checked = true;
-    if (this.opened) { renderSb(); return; }
-    this.opened = true;
+  authed(session) {
+    const raw = session && session.user;
+    const u = raw ? { id: raw.id, email: raw.email || '', name: (raw.user_metadata && raw.user_metadata.username) || userLabel(raw.email) } : null;
+    this.booted = true;
+    if ((u && u.id) === (this.user && this.user.id) && (!u || this.checked)) { renderGate(); return; }
+    this.user = u; this.role = null; this.checked = false; this.libraryId = null; Gem.server = null; Gem.serverWhy = '';
+    if (!u) { this.setState('off'); renderSb(); return; }
+    this.gateMsg = ''; renderSb();
+    const who = u;
     this.setState('syncing', '');
     this.queue(async () => {
+      await this.loadRole();
+      if (!this.role) return false;
       await this.ensureLibraryId();
       if (this.meta.uid !== this.libraryId) {
-        const keep = { flagAt: this.meta.flagAt, setAt: this.meta.setAt, setSig: this.meta.setSig, folders: this.meta.folders };
+        const keep = { flagAt: this.meta.flagAt, setAt: this.meta.setAt, setSig: this.meta.setSig, folders: this.meta.folders, role: this.meta.role, roleEmail: this.meta.roleEmail };
         this.meta = Object.assign(this.freshMeta(), keep, { uid: this.libraryId });
         this.saveMeta();
       }
-    }).then(() => {
+      return true;
+    }).then(ok => {
+      if (!this.user || this.user.id !== who.id) return;
+      if (!ok) this.setState('off');
       renderSb(); renderAll();
-      if (!this.meta.uploadedAt && (Object.keys(Lib.store.invoices).length || S.templates.length)) this.uploadAll().then(() => this.syncNow());
-      else this.syncNow();
+      if (ok && !this.meta.uploadedAt && (Object.keys(Lib.store.invoices).length || S.templates.length)) this.uploadAll().then(() => this.syncNow());
+      else if (ok) this.syncNow();
     }, e => { this.fail(e); renderSb(); });
   },
   linkFailed(desc) {
@@ -4413,7 +4434,7 @@ const Cloud = {
 function renderSyncPill() {
   const b = $('#syncPill'); if (!b) return;
   const C = Cloud;
-  if (!C.key) { b.hidden = !C.loaded; b.className = 'pill syncpill'; b.textContent = 'Not connected'; b.title = 'Supabase is not set up'; }
+  if (!C.key || (!C.user && C.state !== 'error' && C.state !== 'offline')) { b.hidden = !C.key || !C.loaded; b.className = 'pill syncpill'; b.textContent = 'Sign in'; b.title = 'Sign in to copy data to Supabase'; }
   else {
     const map = { synced: ['good', 'Synced'], syncing: ['', 'Syncing'], offline: ['warn', 'Offline'], error: ['bad', 'Sync error'], off: ['', 'Syncing'] }, v = map[C.state] || map.off;
     b.hidden = false; b.className = 'pill syncpill' + (v[0] ? ' ' + v[0] : ''); b.textContent = v[1];
@@ -4423,7 +4444,7 @@ function renderSyncPill() {
 }
 function sbStateHtml() {
   const C = Cloud, n = C.pending();
-  if (!C.key) return '';
+  if (!C.user) return '';
   const v = { synced: ['good', 'Synced'], syncing: ['', 'Syncing…'], offline: ['warn', 'Offline: ' + n + ' change' + pl(n) + ' waiting'], error: ['bad', 'Sync error'] }[C.state] || ['', 'Connecting…'];
   return '<span class="pill ' + v[0] + '">' + esc(v[1]) + '</span>' + (C.state === 'error' && C.err ? ' <span class="note">' + esc(hideKey(C.err)) + '</span>' : '');
 }
@@ -4437,10 +4458,15 @@ function sbBoxHtml() {
     : '<div class="row"><input id="sb-key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="' + (C.key ? 'Paste the new key' : 'Paste the anon or publishable key') + '" aria-describedby="sb-keynote"><button class="btn small primary" type="button" data-set="sb-savekey" disabled>Save key</button>' +
       (C.key ? '<button class="btn small" type="button" data-set="sb-cancelkey">Cancel</button>' : '') + '</div>';
   let acct = '';
-  if (C.key) {
-    acct = '<p class="row" id="sb-state">' + sbStateHtml() + '</p>' +
+  if (C.key && C.user && C.checked && !C.role) {
+    acct = '<div class="keysaved sbwho"><span><b>' + esc(C.user.name || userLabel(C.user.email)) + '</b> is not on the staff list.</span><button class="btn small" type="button" data-set="sb-signout">Sign out</button></div>';
+  } else if (C.key && C.user) {
+    acct = '<div class="keysaved sbwho"><span>Signed in as <b>' + esc(C.user.name || userLabel(C.user.email)) + '</b>' + (C.role ? ' (' + (C.isAdmin() ? 'admin' : 'staff') + ')' : '') + '</span><button class="btn small" type="button" data-set="sb-signout">Sign out</button></div>' +
+      '<p class="row" id="sb-state">' + sbStateHtml() + '</p>' +
       '<div class="row"><button class="btn small' + (C.meta.uploadedAt ? '' : ' primary') + '" type="button" data-set="sb-upload">' + (C.meta.uploadedAt ? 'Upload everything again' : 'Upload existing data') + '</button><button class="btn small" type="button" data-set="sb-pull">Load from Supabase</button></div>' +
-      '<p class="note">No sign-in. Every change is saved to Supabase on its own, and this page loads the newest copy when it opens.' + (C.meta.uploadedAt ? ' Everything in this browser was uploaded on ' + esc(niceDate(C.meta.uploadedAt.slice(0, 10))) + '.' : '') + '</p>';
+      '<p class="note">Every change is saved to Supabase while you are signed in.' + (C.meta.uploadedAt ? ' Everything in this browser was uploaded on ' + esc(niceDate(C.meta.uploadedAt.slice(0, 10))) + '.' : '') + '</p>';
+  } else if (C.key) {
+    acct = '<p class="note">Sign in with the username and password an admin gave you.</p>';
   }
   const where = !S.standalone ? '<p class="pill warn">Inside Claude this page can’t reach Supabase. Sync works in your own copy of the page: the invoice_scraper.html file on your own site, or opened in Chrome, Edge or Safari.</p>' : '';
   if (C.keyFrom === 'env') return where + acct + msg;
@@ -4473,6 +4499,7 @@ async function sbAct(act) {
     else renderSb('Key removed. The data in this browser is kept.');
     return;
   }
+  if (act === 'sb-signout') { await signOutAll(); renderSb('Signed out.'); return; }
   if (act === 'sb-pull') { renderSb('Loading from Supabase…'); await C.syncNow(); renderSb(C.state === 'synced' ? 'Up to date with Supabase.' : ''); return; }
   if (act === 'sb-upload') {
     renderSb('Uploading…');
@@ -4489,65 +4516,69 @@ async function signOutAll() {
 }
 
 /* sign-in screen: with a Supabase key, the page opens only for people on the staff list */
-function gateShown() { return false; }
+function gateShown() { return S.standalone && !!Cloud.key && !(Cloud.user && Cloud.role) && !Cloud.offlinePass(); }
 function gateHtml() {
   const C = Cloud, msg = C.gateMsg ? '<p class="note" aria-live="polite">' + esc(hideKey(C.gateMsg)) + '</p>' : '';
   const down = C.state === 'error' || C.state === 'offline';
   let body;
   if (!C.booted) body = '<p class="note">Checking sign-in…</p>';
-  else if (C.user && C.checked && !C.role) body = '<p><b>' + esc(C.user.email) + '</b> is not on the kitchen staff list. Ask an admin to add this email, then sign in again.</p>' +
+  else if (C.user && C.checked && !C.role) body = '<p><b>' + esc(C.user.name || userLabel(C.user.email)) + '</b> is not on the staff list. Ask an admin to add this username.</p>' +
     '<div class="row"><button class="btn primary" type="button" data-gate="retry">Check again</button><button class="btn" type="button" data-gate="signout">Sign out</button></div>';
   else if (C.user) body = down
     ? '<p class="pill bad">' + esc(hideKey(C.err || 'Supabase could not be reached.')) + '</p><div class="row"><button class="btn primary" type="button" data-gate="retry">Try again</button><button class="btn" type="button" data-gate="signout">Sign out</button></div>'
-    : '<p class="note">Checking access for ' + esc(C.user.email) + '…</p>';
-  else if (C.sentTo) body = '<p class="note">We sent a sign-in email to <b>' + esc(C.sentTo) + '</b>. Type the code from it here, or open its link in this browser.</p>' +
-    '<div class="row"><input id="gate-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="Code from the email" aria-label="Code from the email"><button class="btn primary" type="button" data-gate="verify">Sign in</button></div>' +
-    '<div class="row"><button class="btn small" type="button" data-gate="send">Send a new email</button><button class="btn small" type="button" data-gate="again">Use another email</button></div>';
+    : '<p class="note">Checking access for ' + esc(C.user.name || userLabel(C.user.email)) + '…</p>';
   else body = (down && C.err ? '<p class="pill warn">' + esc(hideKey(C.err)) + '</p>' : '') +
-    '<div class="row"><input id="gate-email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com" value="' + esc(C.email || '') + '" aria-label="Your work email"><button class="btn primary" type="button" data-gate="send">Email me a code</button></div>' +
-    '<p class="note">Only emails on the kitchen staff list can sign in. Ask an admin if yours is not on it.</p>';
+    '<div class="field"><label for="gate-user">Username</label><input id="gate-user" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" value="' + esc(C.email || '') + '"></div>' +
+    '<div class="field"><label for="gate-pass">Password</label><input id="gate-pass" type="password" autocomplete="current-password"></div>' +
+    '<div class="row"><button class="btn primary" type="button" data-gate="signin">Sign in</button></div>' +
+    '<p class="note">Ask an admin if you don’t have a username yet.</p>';
   return '<div class="card"><h2 id="gateTitle">Invoice Scraper</h2><p class="note">Sign in to see the kitchen library and add invoices to it.</p>' + body + msg + '</div>';
 }
 function renderGate(force) {
   const g = $('#gate'); if (!g) return;
   const show = gateShown();
   if (!show) { if (!g.hidden) { g.hidden = true; g.innerHTML = ''; renderGate.sig = ''; } return; }
-  const C = Cloud, sig = [C.booted, C.user && C.user.email, C.checked, C.role, C.sentTo, C.gateMsg, C.state === 'error' || C.state === 'offline', C.err].join('|');
-  if (!force && !g.hidden && sig === renderGate.sig) return;     // re-rendering would wipe what is being typed
+  const C = Cloud, sig = [C.booted, C.user && C.user.email, C.checked, C.role, C.gateMsg, C.state === 'error' || C.state === 'offline', C.err].join('|');
+  if (!force && !g.hidden && sig === renderGate.sig) return;
   renderGate.sig = sig; g.innerHTML = gateHtml(); g.hidden = false;
-  const f = $('#gate-code') || $('#gate-email'); if (f && !f.value) setTimeout(() => f.focus(), 30);
+  const f = $('#gate-user'); if (f && !f.value) setTimeout(() => f.focus(), 30);
 }
 async function gateAct(act) {
   const C = Cloud, say = m => { C.gateMsg = m; renderGate(true); };
-  if (act === 'send') {
-    const e = $('#gate-email'), email = e ? e.value.trim() : C.sentTo; C.email = email;
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return say('Type your email address.');
-    say('Sending…');
-    if (!(await C.connect())) return say(C.err || 'Supabase could not be reached.');
-    const redirect = /^https?:/.test(location.protocol) ? location.origin + location.pathname : undefined;
-    try {
-      const { error } = await C.sb.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo: redirect } });
-      if (error) throw error;
-      C.sentTo = email; say('');
-    } catch (err) { say(C.sayAuth(err)); }
-    return;
-  }
-  if (act === 'verify') {
-    const c = $('#gate-code'), token = c ? c.value.replace(/\s/g, '') : '';
-    if (!/^\d{6,10}$/.test(token)) return say('Type the code from the email.');
+  if (act === 'signin') {
+    const n = $('#gate-user'), p = $('#gate-pass');
+    const name = n ? n.value.trim() : '', password = p ? p.value : '', email = userMail(name);
+    C.email = name;
+    if (!email) return say('Usernames start with a letter and use only letters, numbers, dots, dashes or underscores.');
+    if (!password) return say('Type the password.');
     say('Signing in…');
-    try { const { data, error } = await C.sb.auth.verifyOtp({ email: C.sentTo, token, type: 'email' }); if (error) throw error; C.gateMsg = ''; C.authed(data && data.session); }
-    catch (err) { say(/expired|invalid/i.test(String(err && err.message)) ? 'That code is wrong or has expired. Send a new email.' : C.say(err)); }
+    if (!(await C.connect())) return say(C.err || 'Supabase could not be reached.');
+    try {
+      const { data, error } = await C.sb.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      if (p) p.value = '';
+      C.gateMsg = ''; C.authed(data && data.session);
+    } catch (err) {
+      const m = String(err && err.message || '');
+      say(/invalid|credentials|password/i.test(m) ? 'That username or password is wrong.' : C.say(err));
+    }
     return;
   }
-  if (act === 'again') { C.sentTo = ''; return say(''); }
-  if (act === 'retry') { C.gateMsg = ''; await C.connect(); renderGate(true); return; }
+  if (act === 'retry') {
+    C.gateMsg = ''; C.checked = false;
+    if (!C.sb) { await C.connect(); renderGate(true); return; }
+    const s = await C.sb.auth.getSession();
+    const session = s && s.data ? s.data.session : null;
+    if (session) { C.user = null; C.authed(session); }
+    else renderGate(true);
+    return;
+  }
   if (act === 'signout') { await signOutAll(); return say(''); }
 }
 $('#gate').addEventListener('click', e => { const b = e.target.closest('button[data-gate]'); if (b && !b.disabled) gateAct(b.dataset.gate); });
 $('#gate').addEventListener('keydown', e => {
   if (e.key !== 'Enter') return;
-  const act = { 'gate-email': 'send', 'gate-code': 'verify' }[e.target.id];
+  const act = { 'gate-user': 'signin', 'gate-pass': 'signin' }[e.target.id];
   if (act) { e.preventDefault(); gateAct(act); }
 });
 
@@ -4559,15 +4590,15 @@ function staffBoxHtml() {
   const me = String(Cloud.user && Cloud.user.email || '').toLowerCase();
   const opt = r => ['staff', 'admin'].map(v => '<option value="' + v + '"' + (v === r ? ' selected' : '') + '>' + (v === 'admin' ? 'Admin' : 'Staff') + '</option>').join('');
   const rows = Staff.list.map(s => {
-    const self = s.email === me;
-    return '<div class="staffrow"><span class="who">' + esc(s.email) + (self ? ' (you)' : '') + '</span>' +
-      '<select data-staff-role="' + esc(s.email) + '" aria-label="Role for ' + esc(s.email) + '"' + (self || Staff.loading ? ' disabled' : '') + '>' + opt(s.role) + '</select>' +
+    const self = s.email === me, name = s.username || userLabel(s.email);
+    return '<div class="staffrow"><span class="who">' + esc(name) + (self ? ' (you)' : '') + '</span>' +
+      '<select data-staff-role="' + esc(s.email) + '" aria-label="Role for ' + esc(name) + '"' + (self || Staff.loading ? ' disabled' : '') + '>' + opt(s.role) + '</select>' +
       (self ? '' : '<button class="btn small danger" type="button" data-set="staff-rm" data-email="' + esc(s.email) + '"' + (Staff.loading ? ' disabled' : '') + '>' + (Staff.armed === s.email ? 'Tap again to remove' : 'Remove') + '</button>') + '</div>';
   }).join('');
   return '<div>' + rows + '</div>' +
-    '<div class="row"><input id="staff-email" type="email" inputmode="email" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="new.person@example.com" aria-label="Email to add"><select id="staff-newrole" aria-label="Role for the new person">' + opt('staff') + '</select>' +
+    '<div class="row"><input id="staff-user" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Username" aria-label="Username to add"><input id="staff-pass" type="password" autocomplete="new-password" placeholder="Password" aria-label="Password for the new person"><select id="staff-newrole" aria-label="Role for the new person">' + opt('staff') + '</select>' +
     '<button class="btn small primary" type="button" data-set="staff-add"' + (Staff.loading ? ' disabled' : '') + '>Add</button></div>' +
-    '<p class="note">Staff can view the library and add invoices to it. Admins can also change and delete library records, change shared settings and manage this list. A new person signs in with their email and gets a code. Removing someone signs them out of the library straight away.</p>' +
+    '<p class="note">Staff can view the library and add invoices. Admins can also change and delete records and manage this list. A new person signs in with the username and password you set here.</p>' +
     (Staff.msg ? '<p class="note" aria-live="polite">' + esc(hideKey(Staff.msg)) + '</p>' : '');
 }
 function renderStaff() { const b = $('#staff-box'); if (b) b.innerHTML = staffBoxHtml(); }
@@ -4581,9 +4612,10 @@ async function staffCall(body, done) {
 }
 function staffAct(act, b) {
   if (act === 'staff-add') {
-    const e = $('#staff-email'), email = e ? e.value.trim().toLowerCase() : '', r = $('#staff-newrole'), role = r && r.value === 'admin' ? 'admin' : 'staff';
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { Staff.msg = 'Type the email address to add.'; renderStaff(); return; }
-    staffCall({ op: 'add', email, role }, email + ' was added as ' + role + '. They can sign in now with that email.');
+    const e = $('#staff-user'), p = $('#staff-pass'), name = e ? e.value.trim() : '', password = p ? p.value : '', r = $('#staff-newrole'), role = r && r.value === 'admin' ? 'admin' : 'staff';
+    if (!userMail(name)) { Staff.msg = 'Usernames start with a letter and use only letters, numbers, dots, dashes or underscores.'; renderStaff(); return; }
+    if (password.length < 4) { Staff.msg = 'Type a password of at least 4 characters.'; renderStaff(); return; }
+    staffCall({ op: 'add', username: name, password, role }, name + ' was added as ' + role + '. They can sign in with that username and password.');
     return;
   }
   if (act === 'staff-rm') {
@@ -4633,7 +4665,7 @@ function renderSettings(msg) {
   $('#settings').innerHTML = '<div class="card"><h2 id="setTitle">Settings<button class="iconbtn" type="button" data-set="close" aria-label="Close settings">&times;</button></h2>' +
     (S.setNote ? '<p class="pill warn">' + esc(S.setNote) + '</p>' : '') +
     '<h3 class="sec">Supabase copy</h3>' +
-    '<p class="note">' + (Cloud.keyFrom === 'env' ? 'Every change is saved to Supabase automatically. No sign-in. It also keeps working offline and catches up when the connection is back.' : 'Everything stays in this browser and works offline. With a key, each change is also copied to your Supabase project, and other devices load it from there.') + '</p>' +
+    '<p class="note">Every change is saved to Supabase while you are signed in. It also keeps working offline and catches up when the connection is back.</p>' +
     '<div id="sb-box">' + sbBoxHtml() + '</div>' +
     (Cloud.isAdmin() ? '<h3 class="sec">Staff</h3><div id="staff-box">' + staffBoxHtml() + '</div>' : '') +
     '<h3 class="sec">Invoice folder</h3>' + folder +
@@ -4653,7 +4685,7 @@ function renderSettings(msg) {
 // the key behind the Supabase route stays in Supabase secrets; this only says which route scans use
 function gemViaHtml() {
   if (!Cloud.key) return '';
-  if (!Gem.key) return '<p class="note">Add a Gemini API key below to scan pictures. The key stays in this browser.</p>';
+  if (!Cloud.user || !Cloud.role) return '<p class="note">Sign in to scan with the Gemini key kept in Supabase. It never comes to this page.</p>';
   if (Gem.server === false) return '<p class="pill warn">' + esc(gemErr({ code: 'server_off', via: 'server', why: Gem.serverWhy })) + (Gem.key ? ' Using the key saved in this browser for now.' : '') + '</p>';
   return '<p class="pill good">' + (Gem.server ? 'Scans go through your Supabase project' : 'Scans will go through your Supabase project') + '</p>' +
     '<p class="note">The Gemini key is kept in Supabase and never comes to this page.' + (Gem.key ? ' A key is also saved in this browser; it is used only if Supabase can’t scan. You can Forget it below.' : '') + '</p>';
@@ -4688,7 +4720,7 @@ $('#settings').addEventListener('click', async e => {
 });
 $('#settings').addEventListener('change', e => {
   const t = e.target;
-  if (t.id === 'g-key' || t.id === 'sb-key' || t.id === 'sb-email' || t.id === 'sb-code' || t.id === 'staff-email' || t.id === 'staff-newrole') return;
+  if (t.id === 'g-key' || t.id === 'sb-key' || t.id === 'staff-user' || t.id === 'staff-pass' || t.id === 'staff-newrole') return;
   if (t.dataset.staffRole) { const email = t.dataset.staffRole; staffCall({ op: 'role', email, role: t.value }, email + ' is now ' + (t.value === 'admin' ? 'an admin' : 'staff') + '.'); return; }
   if (t.id === 'sb-url') {
     const v = t.value.trim().replace(/\/+$/, '');
@@ -4708,7 +4740,7 @@ $('#settings').addEventListener('input', e => {
   if (btn) { const sb = $('#settings [data-set="' + btn + '"]'); if (sb) sb.disabled = !e.target.value.trim(); }
 });
 $('#settings').addEventListener('keydown', e => {
-  const btn = { 'g-key': 'savekey', 'sb-key': 'sb-savekey', 'sb-email': 'sb-send', 'sb-code': 'sb-verify', 'staff-email': 'staff-add' }[e.target.id];
+  const btn = { 'g-key': 'savekey', 'sb-key': 'sb-savekey', 'staff-user': 'staff-add', 'staff-pass': 'staff-add' }[e.target.id];
   if (btn && e.key === 'Enter') { e.preventDefault(); const sb = $('#settings [data-set="' + btn + '"]'); if (sb && !sb.disabled) sb.click(); }
 });
 // the key never appears in a message, whatever an error or a server says

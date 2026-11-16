@@ -13,10 +13,21 @@ const cors = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
+const USER_MAIL = 'users.invoice.local';
+const USER_NAME = /^[a-z][a-z0-9._-]{0,31}$/;
 const URL_ = (Deno.env.get('SUPABASE_URL') || '').replace(/\/+$/, '');
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+type Staff = { email: string; role: 'admin' | 'staff'; created_at?: string; username?: string };
 
-type Staff = { email: string; role: 'admin' | 'staff'; created_at?: string };
+function mailOf(name: string): string {
+  const u = String(name || '').trim().toLowerCase();
+  return USER_NAME.test(u) ? u + '@' + USER_MAIL : '';
+}
+function labelOf(email: string): string {
+  const e = String(email || '').toLowerCase();
+  if (!e.endsWith('@' + USER_MAIL)) return e;
+  const u = e.slice(0, e.length - USER_MAIL.length - 1);
+  return u ? u.charAt(0).toUpperCase() + u.slice(1) : e;
+}
 
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
@@ -53,7 +64,7 @@ async function rest(path: string, init: RequestInit = {}): Promise<unknown> {
   if (!r.ok) throw new Error('Database: ' + text.slice(0, 200));
   return text ? JSON.parse(text) : null;
 }
-const list = async () => (await rest('staff?select=email,role,created_at&order=email.asc')) as Staff[];
+const list = async () => ((await rest('staff?select=email,role,created_at&order=email.asc')) as Staff[]).map(s => ({ ...s, username: labelOf(s.email) }));
 
 async function authUserId(email: string): Promise<string> {
   for (let page = 1; page <= 50; page++) {
@@ -75,29 +86,35 @@ Deno.serve(async (req: Request) => {
   const me = await signedInEmail(req).catch(() => '');
   if (!me) return fail(401, 'unauthorized', 'Sign in again.');
 
-  let msg: { op?: string; email?: string; role?: string };
+  let msg: { op?: string; email?: string; username?: string; password?: string; role?: string };
   try { msg = await req.json(); } catch { return fail(400, 'bad_request', 'The request is not JSON.'); }
 
   try {
     let staff = await list();
     if (!staff.some(s => s.email === me && s.role === 'admin')) return fail(403, 'not_admin', 'Only admins can manage staff.');
-    const email = String(msg.email || '').trim().toLowerCase();
+    const email = mailOf(msg.username || '') || String(msg.email || '').trim().toLowerCase();
     const role = msg.role === 'admin' ? 'admin' : 'staff';
     const admins = staff.filter(s => s.role === 'admin').length;
     const target = staff.find(s => s.email === email);
 
     if (msg.op === 'list') return json(200, { staff });
-    if (!EMAIL.test(email)) return fail(400, 'bad_email', 'That is not an email address.');
+    if (!email.endsWith('@' + USER_MAIL) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail(400, 'bad_username', 'That username cannot be used.');
 
     if (msg.op === 'add') {
+      const password = String(msg.password || '');
+      const username = labelOf(email);
+      if (!email.endsWith('@' + USER_MAIL)) return fail(400, 'bad_username', 'Usernames start with a letter and use only letters, numbers, dots, dashes or underscores.');
+      if (password.length < 4) return fail(400, 'bad_password', 'Type a password of at least 4 characters.');
       if (target && target.role === 'admin' && role !== 'admin' && admins <= 1) return fail(409, 'last_admin', 'The kitchen needs at least one admin.');
       await rest('staff?on_conflict=email', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates' }, body: JSON.stringify([{ email, role }]) });
-      if (!(await authUserId(email))) {
-        const r = await fetch(URL_ + '/auth/v1/admin/users', { method: 'POST', headers: adminHeaders(), body: JSON.stringify({ email, email_confirm: true }) });
-        if (!r.ok && r.status !== 422) throw new Error('Auth: ' + (await r.text()).slice(0, 200));
-      }
+      const id = await authUserId(email);
+      const body = JSON.stringify({ email, password, email_confirm: true, user_metadata: { username: String(msg.username || username).trim() || username } });
+      const r = id
+        ? await fetch(URL_ + '/auth/v1/admin/users/' + id, { method: 'PUT', headers: adminHeaders(), body })
+        : await fetch(URL_ + '/auth/v1/admin/users', { method: 'POST', headers: adminHeaders(), body });
+      if (!r.ok && r.status !== 422) throw new Error('Auth: ' + (await r.text()).slice(0, 200));
     } else if (msg.op === 'role') {
-      if (!target) return fail(404, 'not_found', 'That email is not on the staff list.');
+      if (!target) return fail(404, 'not_found', 'That username is not on the staff list.');
       if (email === me && role !== 'admin') return fail(409, 'self', 'You can’t remove your own admin role. Ask another admin.');
       if (target.role === 'admin' && role !== 'admin' && admins <= 1) return fail(409, 'last_admin', 'The kitchen needs at least one admin.');
       await rest('staff?email=eq.' + encodeURIComponent(email), { method: 'PATCH', body: JSON.stringify({ role }) });

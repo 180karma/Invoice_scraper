@@ -8,10 +8,10 @@ Drop in supplier invoices (PDF or image) to extract line items, header fields, a
 
 ## Shared kitchen library
 
-The page connects with the project's anon key and does **not** ask anyone to sign in. Every device shares **one** Supabase library (invoices, items, layouts, settings), and every change is saved on its own.
+The page connects with the project's anon key, then asks for a **username and password**. There is no email sign-in. The admin username is Admin.
 
 - Run `supabase-schema.sql` once in the Supabase SQL editor (safe to re-run).
-- Anyone who opens the page can view, add, change and delete the library. The staff list is no longer used for access.
+- Signed-in people see the same library and can add invoices. Admins can also change and delete records, and add or remove usernames under Settings → Staff.
 
 ## Keys
 
