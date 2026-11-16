@@ -56,3 +56,6 @@ jobs:
       - name: Deploy gemini-extract
         if: steps.check.outputs.go == 'true'
         run: supabase functions deploy gemini-extract --project-ref "$PROJECT_REF" --no-verify-jwt
+      - name: Deploy staff-admin
+        if: steps.check.outputs.go == 'true'
+        run: supabase functions deploy staff-admin --project-ref "$PROJECT_REF" --no-verify-jwt

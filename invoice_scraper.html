@@ -331,6 +331,15 @@ a.contact:hover { background: var(--wash); text-decoration: underline; text-unde
 .sbwho span { min-width: 0; overflow-wrap: anywhere; }
 #sb-box > * + * { margin-top: 8px; }
 #sb-box .row input { flex: 1 1 180px; min-width: 0; }
+.modal.gate { z-index: 40; background: var(--bg); }
+.gate .card { max-width: 420px; }
+.gate .card > * { margin: 0; }
+.gate .row input { flex: 1 1 180px; min-width: 0; height: 38px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 0 10px; }
+#staff-box { display: flex; flex-direction: column; gap: 8px; }
+.staffrow { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.staffrow .who { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
+#staff-box select, #staff-box input { height: 32px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 0 8px; }
+#staff-box .row input { flex: 1 1 180px; min-width: 0; }
 .modal .keysaved .pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 3px 10px; }
 .modal .keysaved .pill::before { margin-top: 0; }
 .modal h3.sec { margin: 6px 0 0; }
@@ -507,6 +516,7 @@ a.contact:hover { background: var(--wash); text-decoration: underline; text-unde
 </div>
 <div class="toast" id="toast" role="status" hidden></div>
 <div class="modal" id="settings" hidden role="dialog" aria-modal="true" aria-labelledby="setTitle"></div>
+<div class="modal gate" id="gate" hidden role="dialog" aria-modal="true" aria-labelledby="gateTitle"></div>
 <div class="modal supmodal" id="supModal" hidden role="dialog" aria-modal="true" aria-labelledby="supTitle"></div>
 <nav class="mnav" id="mnav" aria-label="Sections">
   <button type="button" data-mob="viewer">Viewer</button>
@@ -2071,7 +2081,7 @@ async function addFiles(files) {
   }
   busy(null);
   const tplMsg = nTpl ? ' ' + (nTpl === 1 ? 'A new supplier layout was' : nTpl + ' new supplier layouts were') + ' saved automatically.' : '';
-  if (nNew || nOld) toast((nNew ? nNew + ' invoice' + pl(nNew) + ' added to the library.' : '') + (nOld ? (nNew ? ' ' : '') + nOld + ' already there, so ' + (nOld === 1 ? 'its record was' : 'their records were') + ' refreshed, not added twice.' : '') + tplMsg + cutMsg);
+  if (nNew || nOld) toast((nNew ? nNew + ' invoice' + pl(nNew) + ' added to the library.' : '') + (nOld ? (nNew ? ' ' : '') + nOld + ' already there, so ' + (Cloud.limited() ? 'not added twice. Only an admin can change a record that is already in the library.' : (nOld === 1 ? 'its record was' : 'their records were') + ' refreshed, not added twice.') : '') + tplMsg + cutMsg);
   else if (cutMsg || tplMsg) toast((tplMsg + cutMsg).trim());
   if (first) { S.cur = S.docs.indexOf(first); S.page = 0; S.sel = null; S.pending = null; await showPage(); fit(); }
   else if (S.cur >= S.docs.length) S.cur = S.docs.length - 1;
@@ -2814,7 +2824,7 @@ function renderSuppliers() {
       '<div class="t">' + supNameBtn(t.name, supplierIdFn()(t.name, t.abn), 'tplname') + '<span>' + (t.abn ? 'ABN ' + esc(fmtAbn(t.abn)) + ' · ' : '') + t.zones.length + ' box' + (t.zones.length === 1 ? '' : 'es') + (t.auto ? ' · saved automatically' : '') + (on ? ' · in use' : '') + '</span>' +
       (contactLinks(t, true).length ? '<div class="contacts">' + contactLinks(t, true).join('') + '</div>' : '') + '</div>' +
       (doc && !on ? '<button class="btn small" type="button" data-apply="' + esc(t.id) + '">Apply</button>' : '') +
-      '<button class="iconbtn" type="button" data-del="' + esc(t.id) + '" aria-label="Delete the layout for ' + esc(t.name) + '">' + IC.bin.replace('<svg', '<svg width="18" height="18"') + '</button></div>';
+      (Cloud.limited() ? '' : '<button class="iconbtn" type="button" data-del="' + esc(t.id) + '" aria-label="Delete the layout for ' + esc(t.name) + '">' + IC.bin.replace('<svg', '<svg width="18" height="18"') + '</button>') + '</div>';
   }
   if (S.templates.length) h += '<p class="note">' + (Store.where === 'page' ? 'Layouts are stored with this page, so they are there on your other devices too.' : 'Layouts are stored in this browser only.') + '</p>';
   el.innerHTML = h;
@@ -2855,12 +2865,12 @@ $('#panel').addEventListener('click', async e => {
   if (b.dataset.inv != null) { S.lib.open = S.lib.open === b.dataset.inv ? null : b.dataset.inv; renderLibrary(); return; }
   if (b.dataset.ignore != null) { toggleIgnore(b.dataset.ignore); return; }
   if (b.dataset.unignore != null) { Lib.mutate(st => { if (st.ignored) delete st.ignored[b.dataset.unignore]; }); for (const d of S.docs) run(d); toast('Will be scanned on new invoices.'); renderAll(); return; }
-  if (b.dataset.hide != null) { const k = b.dataset.hide; Lib.mutate(st => { st.hidden[k] = 1; }); S.lib.open = null; renderTabs(); renderLibrary(); return; }
-  if (b.dataset.rmInv != null) { libRemoveInvoice(b.dataset.rmInv); return; }
+  if (b.dataset.hide != null) { if (adminOnly()) return; const k = b.dataset.hide; Lib.mutate(st => { st.hidden[k] = 1; }); S.lib.open = null; renderTabs(); renderLibrary(); return; }
+  if (b.dataset.rmInv != null) { if (!adminOnly()) libRemoveInvoice(b.dataset.rmInv); return; }
   if (b.dataset.act === 'copy-table') { await copyVisibleTable(); return; }
   if (b.dataset.act && libAct(b.dataset.act)) return;
   const doc = cur();
-  if (b.dataset.del) { await Store.remove(b.dataset.del); S.docs.forEach(d => { if (d.tplId === b.dataset.del) { d.tplId = null; d.tplWhy = []; } }); renderAll(); return; }
+  if (b.dataset.del) { if (adminOnly()) return; await Store.remove(b.dataset.del); S.docs.forEach(d => { if (d.tplId === b.dataset.del) { d.tplId = null; d.tplWhy = []; } }); renderAll(); return; }
   if (!doc) return;
   if (b.dataset.row != null) { showRow(+b.dataset.row); return; }
   if (b.dataset.restore != null) { const s = doc.result.skipped[+b.dataset.restore]; if (s) { if (s.ai != null) delete doc.aiMap[s.ai]; else { const z = doc.zones.find(o => o.id === s.zoneId); if (z && z.map) delete z.map[s.srcIndex]; changed(doc, null); } run(doc); renderAll(); } return; }
@@ -3253,7 +3263,7 @@ function libItemRows(it, n, nCols) {
     '<td class="num">' + money(it.spend) + '</td></tr>';
   if (open) h += '<tr class="hist"><td colspan="' + nCols + '"><div class="sheet-hist"><table class="libsheet nested"><thead><tr><th>Date</th><th>Invoice</th><th class="num">Qty</th><th>UOM</th><th class="num">Unit price</th><th class="num">Amount</th></tr></thead><tbody>' +
     it.history.map(r => '<tr><td>' + esc(niceDate(r.date)) + '</td><td>' + esc(r.invoice_no || '') + '</td><td class="num">' + esc(fmtQty(r.quantity)) + '</td><td>' + esc(r.uom || '') + '</td><td class="num">' + priceHtml(r.unit_price, r.uom) + '</td><td class="num">' + esc(typeof r.amount === 'number' ? money(r.amount) : (r.amount || '')) + '</td></tr>').join('') +
-    '</tbody></table><div class="under"><span>' + it.lines + ' record' + pl(it.lines) + ', ' + money(it.spend) + ' in total</span><button class="link" type="button" data-hide="' + esc(it.key) + '">Hide this item from the library</button></div></div></td></tr>';
+    '</tbody></table><div class="under"><span>' + it.lines + ' record' + pl(it.lines) + ', ' + money(it.spend) + ' in total</span>' + (Cloud.limited() ? '' : '<button class="link" type="button" data-hide="' + esc(it.key) + '">Hide this item from the library</button>') + '</div></div></td></tr>';
   return h;
 }
 function libInvRows(i, n, nCols) {
@@ -3265,7 +3275,7 @@ function libInvRows(i, n, nCols) {
     '<td class="num">' + i.lines.length + '</td><td class="num">' + (i.total != null ? money(i.total) : '') + '</td><td>' + (i.src === 'gemini' ? 'Gemini' : i.src === 'claude' ? 'Claude' : 'Text') + '</td>' +
     '<td class="clip">' + Engine.splitList(i.phone).map(telLink).join(' ') + '</td><td class="clip">' + Engine.splitList(i.email).map(mailLink).join(' ') + '</td>' +
     '<td class="clip" title="' + esc(i.file || '') + '">' + esc(i.file || '') + '</td>' +
-    '<td class="act"><button class="iconbtn" type="button" data-rm-inv="' + esc(i.key) + '" aria-label="Remove ' + esc(i.invoice_no || i.file) + ' from the library" title="Remove from the library">' + IC.bin.replace('<svg', '<svg width="18" height="18"') + '</button></td></tr>';
+    '<td class="act">' + (Cloud.limited() ? '' : '<button class="iconbtn" type="button" data-rm-inv="' + esc(i.key) + '" aria-label="Remove ' + esc(i.invoice_no || i.file) + ' from the library" title="Remove from the library">' + IC.bin.replace('<svg', '<svg width="18" height="18"') + '</button>') + '</td></tr>';
   if (open) h += '<tr class="hist"><td colspan="' + nCols + '"><div class="sheet-hist"><p class="note">Items purchased on this invoice. Ignore one to leave it out when new invoices are scanned.</p><table class="libsheet nested"><thead><tr><th class="act"></th><th>Code</th><th>Description</th><th class="num">Qty</th><th>UOM</th><th class="num">Unit price</th><th class="num">Amount</th></tr></thead><tbody>' +
     i.lines.map(L => {
       const id = Library.lineId(i, L), off = Library.keyIsIgnored(ignored, id);
@@ -3328,10 +3338,10 @@ function renderLibrary() {
   const off = a.invoices.length ? '' : ' disabled';
   $('#lib-foot').innerHTML = '<div class="row"><button class="btn small" type="button" data-act="lib-items-csv"' + off + '>Items CSV</button><button class="btn small" type="button" data-act="lib-records-csv"' + off + '>Records CSV</button>' +
     '<button class="btn small" type="button" data-act="lib-backup"' + off + '>Back up</button><button class="btn small" type="button" data-act="lib-restore">Restore</button>' +
-    '<button class="btn small danger" type="button" data-act="lib-clear"' + off + '>' + (L.armed ? 'Tap again to delete everything' : 'Clear library') + '</button></div>' +
-    (a.hidden ? '<p class="note">' + a.hidden + ' item' + pl(a.hidden) + ' hidden. <button class="link" type="button" data-act="lib-unhide">Show ' + (a.hidden === 1 ? 'it' : 'them') + ' again</button></p>' : '') +
+    (Cloud.limited() ? '' : '<button class="btn small danger" type="button" data-act="lib-clear"' + off + '>' + (L.armed ? 'Tap again to delete everything' : 'Clear library') + '</button>') + '</div>' +
+    (a.hidden ? '<p class="note">' + a.hidden + ' item' + pl(a.hidden) + ' hidden.' + (Cloud.limited() ? '' : ' <button class="link" type="button" data-act="lib-unhide">Show ' + (a.hidden === 1 ? 'it' : 'them') + ' again</button>') + '</p>' : '') +
     (a.ignored ? '<p class="note">' + a.ignored + ' item' + pl(a.ignored) + ' ignored on new invoices. <button class="link" type="button" data-act="lib-unignore">Scan ' + (a.ignored === 1 ? 'it' : 'them') + ' again</button></p>' : '') +
-    (Cloud.user ? '<p class="note">The library lives in this browser and is copied to the shared kitchen library in Supabase (signed in as ' + esc(Cloud.user.email || 'this account') + '). Other staff who sign in see and edit the same invoices and items.</p>'
+    (Cloud.user ? '<p class="note">The library lives in this browser and is copied to the shared kitchen library in Supabase (signed in as ' + esc(Cloud.user.email || 'this account') + '). Everyone on the staff list sees the same invoices and items and can add to them' + (Cloud.limited() ? '; only an admin can change or delete records already here.' : '; admins can also change and delete them.') + '</p>'
       : '<p class="note">The library lives in this browser’s local storage on this device. Another browser or device starts empty, and clearing site data erases it, so take a backup now and then, or turn on the Supabase copy in Settings.</p>');
   syncCopyTableBtn();
 }
@@ -3354,6 +3364,7 @@ async function giveFile(name, text, what) {
   try { await navigator.clipboard.writeText((text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text)); toast(what + ' copied. Saving files is not available in this view.'); }
   catch (e) { toast('Saving files is not available in this view.', 'bad'); }
 }
+function adminOnly() { if (!Cloud.limited()) return false; toast('Only an admin can change or delete what is already in the library.'); return true; }
 // library buttons work with or without an invoice open; returns true when it handled the click
 function libAct(act) {
   const BOM = String.fromCharCode(0xFEFF), day = new Date().toISOString().slice(0, 10), d = cur();
@@ -3361,13 +3372,14 @@ function libAct(act) {
     case 'open-lib': S.tab = 'library'; renderTabs(); renderTab(); return true;
     case 'lib-add': if (d) { d.lib = true; d.libState = ''; const how = Lib.sync(d); toast(how === 'replaced' ? 'This invoice was already in the library. Its record was refreshed, not added twice.' : how === 'empty' ? 'Nothing to save yet: no line has an item number or description.' : Lib.state === 'ok' ? 'Saved to the library.' : 'Kept for now, but this browser is not storing it.'); renderAll(); } return true;
     case 'lib-more': S.lib.limit += 200; renderLibrary(); return true;
-    case 'lib-unhide': Lib.mutate(st => { st.hidden = {}; }); renderTabs(); renderLibrary(); return true;
+    case 'lib-unhide': if (adminOnly()) return true; Lib.mutate(st => { st.hidden = {}; }); renderTabs(); renderLibrary(); return true;
     case 'lib-unignore': Lib.mutate(st => { st.ignored = {}; }); for (const x of S.docs) run(x); toast('Ignored items will be scanned again.'); renderAll(); return true;
     case 'lib-items-csv': giveFile('inventory-items-' + day + '.csv', BOM + Library.itemsCSV(Lib.agg(), S.opts.dateStyle), 'Items CSV'); return true;
     case 'lib-records-csv': giveFile('inventory-records-' + day + '.csv', BOM + Library.recordsCSV(Lib.agg(), S.opts.dateStyle), 'Records CSV'); return true;
     case 'lib-backup': giveFile('inventory-library-' + day + '.json', JSON.stringify(Lib.store, null, 1), 'Backup'); return true;
     case 'lib-restore': { const f = $('#libFile'); if (f) f.click(); return true; }
     case 'lib-clear':
+      if (adminOnly()) return true;
       if (!S.lib.armed) { S.lib.armed = true; renderLibrary(); clearTimeout(libAct.t); libAct.t = setTimeout(() => { S.lib.armed = false; if (S.tab === 'library') renderLibrary(); }, 4000); return true; }
       clearTimeout(libAct.t); S.lib.armed = false; S.lib.open = null;
       Lib.mutate(st => { st.invoices = {}; st.hidden = {}; st.ignored = {}; });
@@ -3711,7 +3723,7 @@ function gemErr(e) {
       if (e.why === 'network') return 'The Gemini scan function in Supabase could not be reached. It may not be deployed yet.';
       return 'The Gemini scan function (gemini-extract) is not ' + (e.why === 'missing' ? 'deployed to Supabase yet.' : 'working in Supabase right now.');
     case 'server_auth': return 'Sign in again under Supabase copy to scan with Gemini.';
-    case 'not_allowed': return 'This account is not on the list allowed to scan with Gemini.';
+    case 'not_allowed': return 'This account is not on the kitchen staff list, so it can’t scan with Gemini.';
     case 'blocked': return 'Gemini can’t be reached from inside Claude. Open your own copy of this page to use it.';
     case 'network': return srv ? 'Supabase could not reach Gemini. Try again in a minute.' : 'Gemini could not be reached. Check the internet connection and try again.';
     case 'declined': return 'Gemini declined to read this page.';
@@ -3965,7 +3977,37 @@ const Cloud = {
   KEY: 'invoice-scraper.supabase.v1', QKEY: 'invoice-scraper.supabase.queue.v1', MKEY: 'invoice-scraper.supabase.meta.v1',
   url: SB_HOME, key: '', ownUrl: '', ownKey: '', keyFrom: '', sb: null, user: null, libraryId: null, state: 'off', err: '', loaded: false, applying: false,
   sentTo: '', email: '', keyEdit: false, msg: '', dirty: {}, meta: null, tplSnap: {}, timer: 0, tries: 0, chain: Promise.resolve(), connecting: null,
-  freshMeta() { return { uid: '', flagAt: {}, setAt: '', setSig: '', folders: {}, lc: {}, sup: {}, uploadedAt: '', pulledAt: '' }; },
+  role: null, checked: false, booted: false, gateMsg: '',
+  freshMeta() { return { uid: '', flagAt: {}, setAt: '', setSig: '', folders: {}, lc: {}, sup: {}, uploadedAt: '', pulledAt: '', role: '', roleEmail: '' }; },
+  isAdmin() { return this.role === 'admin'; },
+  // signed in as staff (not admin): edits and deletes are hidden here and refused by Supabase
+  limited() { return !!(this.key && this.role && this.role !== 'admin'); },
+  // a person who signed in on this device before may keep working while Supabase can't be reached
+  offlinePass() { return !this.user && !!this.meta && (this.meta.role === 'admin' || this.meta.role === 'staff') && (this.state === 'offline' || !navigator.onLine); },
+  async loadRole() {
+    const email = String(this.user.email || '').toLowerCase();
+    try {
+      const { data, error } = await this.sb.from('staff').select('role').eq('email', email).maybeSingle();
+      if (error) throw error;
+      this.role = data && (data.role === 'admin' || data.role === 'staff') ? data.role : null;
+      this.meta.role = this.role || ''; this.meta.roleEmail = email; this.saveMeta();
+    } catch (e) {
+      if (!(this.isNetwork(e) && this.meta.roleEmail === email && this.meta.role)) throw e;
+      this.role = this.meta.role;
+    }
+    this.checked = true;
+  },
+  async callFn(name, body) {
+    if (!this.sb) throw new Error('Supabase is not connected.');
+    let tok = '';
+    try { const s = await this.sb.auth.getSession(); tok = s && s.data && s.data.session ? s.data.session.access_token : ''; } catch (e) {}
+    if (!tok) throw new Error('not authenticated');
+    const r = await fetch(this.url + '/functions/v1/' + name, { method: 'POST', headers: { apikey: this.key, Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    let j = null; try { j = await r.json(); } catch (e) {}
+    if (r.status === 404 && !(j && j.error)) throw new Error('The ' + name + ' function is not deployed to Supabase yet.');
+    if (!r.ok) throw new Error(j && j.error && j.error.message ? j.error.message : 'Supabase answered ' + r.status + '.');
+    return j || {};
+  },
   // kitchen library id from app_meta (shared by all signed-in staff); not the person's auth uid
   libraryUid() {
     if (!this.libraryId) throw new Error('The shared kitchen library is not set up. Run supabase-schema.sql in Supabase.');
@@ -4010,7 +4052,7 @@ const Cloud = {
   save() { try { localStorage.setItem(this.KEY, JSON.stringify({ url: this.ownUrl, urlSet: !!this.ownUrl, key: this.ownKey })); } catch (e) {} },
   saveQ() { try { localStorage.setItem(this.QKEY, JSON.stringify(this.dirty)); } catch (e) {} },
   saveMeta() { try { localStorage.setItem(this.MKEY, JSON.stringify(this.meta)); } catch (e) {} },
-  ready() { return !!(this.sb && this.user); },
+  ready() { return !!(this.sb && this.user && this.role); },
   watching() { return this.loaded && !!this.key && !this.applying; },
   pending() { return Object.keys(this.dirty).length; },
 
@@ -4078,25 +4120,42 @@ const Cloud = {
         if (linkErr) this.linkFailed(linkErr);
         this.authed(r && r.data ? r.data.session : null);
         return true;
-      } catch (e) { this.sb = null; this.setState(navigator.onLine ? 'error' : 'offline', this.say(e)); return false; }
+      } catch (e) { this.sb = null; this.booted = true; this.setState(navigator.onLine ? 'error' : 'offline', this.say(e)); renderGate(); return false; }
       finally { this.connecting = null; }
     })();
     return this.connecting;
   },
   authed(session) {
     const u = session && session.user ? { id: session.user.id, email: session.user.email || '' } : null;
-    if ((u && u.id) === (this.user && this.user.id) && (!u || this.libraryId)) return;
-    this.user = u; Gem.server = null; Gem.serverWhy = '';
-    if (!u) { this.libraryId = null; this.setState('off'); renderSb(); return; }
-    this.sentTo = ''; renderSb(/^(Key saved|To finish signing in)/.test(this.msg) ? '' : null);
-    this.queue(async () => {
+    this.booted = true;
+    if ((u && u.id) === (this.user && this.user.id) && (!u || this.checked)) { renderGate(); return; }
+    this.user = u; this.role = null; this.checked = false; this.libraryId = null; Gem.server = null; Gem.serverWhy = '';
+    if (!u) { this.setState('off'); renderSb(); return; }
+    this.sentTo = ''; this.gateMsg = ''; renderSb(/^(Key saved|To finish signing in)/.test(this.msg) ? '' : null);
+    this.recheck();
+  },
+  // only people on the staff list get past the sign-in screen and sync
+  recheck() {
+    if (!this.user || !this.sb) return Promise.resolve(false);
+    const u = this.user;
+    this.setState('syncing', ''); renderGate();
+    return this.queue(async () => {
+      await this.loadRole();
+      if (!this.role) return false;
       await this.ensureLibraryId();
       if (this.meta.uid !== this.libraryId) {
-        const keep = { flagAt: this.meta.flagAt, setAt: this.meta.setAt, setSig: this.meta.setSig, folders: this.meta.folders };
+        const keep = { flagAt: this.meta.flagAt, setAt: this.meta.setAt, setSig: this.meta.setSig, folders: this.meta.folders, role: this.meta.role, roleEmail: this.meta.roleEmail };
         this.meta = Object.assign(this.freshMeta(), keep, { uid: this.libraryId });
         this.saveMeta();
       }
-    }).then(() => this.syncNow(), e => this.fail(e));
+      return true;
+    }).then(ok => {
+      if (this.user !== u) return false;
+      if (!ok) this.setState('off');
+      renderSb(); renderAll();
+      if (ok) this.syncNow();
+      return ok;
+    }, e => { this.fail(e); renderSb(); return false; });
   },
   linkFailed(desc) {
     const m = /expired|invalid/i.test(desc) ? 'That sign-in link has expired or was already used. Some email apps open links to check them, which uses them up. Send a new email and open the link once.'
@@ -4105,7 +4164,7 @@ const Cloud = {
   },
   async disconnect() {
     clearTimeout(this.timer);
-    const sb = this.sb; this.sb = null; this.user = null; this.libraryId = null; this.setState('off');
+    const sb = this.sb; this.sb = null; this.user = null; this.role = null; this.checked = false; this.libraryId = null; this.setState('off');
     if (sb) { try { await sb.auth.signOut({ scope: 'local' }); } catch (e) {} }
   },
 
@@ -4131,7 +4190,7 @@ const Cloud = {
     const m = String((e && e.message) || '') + ' ' + String((e && e.code) || ''), secs = m.match(/after (\d+) seconds?/i);
     if (secs) return 'Supabase needs a short wait between sign-in emails. Try again in ' + secs[1] + ' seconds.';
     if (/email rate limit|over_email_send_rate_limit/i.test(m)) return 'Supabase has sent as many sign-in emails as its built-in sender allows this hour. Use the last email, try again later, or set up custom SMTP in Supabase (Authentication, Emails).';
-    if (/signups? not allowed|signup_disabled/i.test(m)) return 'Sign-ups are turned off in Supabase and this email has no account yet. Turn on Allow new users to sign up (Authentication, Sign In / Providers), or add the user under Authentication, Users.';
+    if (/signups? not allowed|signup_disabled|otp_disabled|user not found/i.test(m)) return 'This email is not on the kitchen staff list. Ask an admin to add it under Settings, Staff.';
     if (/email.*(provider|logins?).*disabled|email_provider_disabled/i.test(m)) return 'Email sign-in is turned off in Supabase. Turn on Email under Authentication, Sign In / Providers.';
     if (/rate|too many/i.test(m)) return 'Supabase is limiting sign-in emails. Wait a minute and try again.';
     return this.say(e);
@@ -4216,10 +4275,10 @@ const Cloud = {
         const t = S.templates.find(x => x.id === key);
         tpl.push(t ? { user_id: uid, id: key, name: t.name, abn: t.abn || '', supplier_id: idOf(t.name, t.abn), auto: !!t.auto, data: JSON.parse(JSON.stringify(t)), deleted: false, updated_at: sbIso(t.updated) || at }
           : { user_id: uid, id: key, deleted: true, updated_at: at });
-      } else if (kind === 'ign' || kind === 'hid') {
+      } else if (kind === 'ign' || (kind === 'hid' && !this.limited())) {
         const on = !!(kind === 'ign' ? st.ignored : st.hidden)[key];
         flags.push({ user_id: uid, kind: kind === 'ign' ? 'ignore' : 'hide', item_key: key, deleted: !on, updated_at: sbIso(M.flagAt[id]) || at });
-      } else if (kind === 'set') set.push({ user_id: uid, name: 'app', data: this.settingsData(), updated_at: sbIso(M.setAt) || at });
+      } else if (kind === 'set' && !this.limited()) set.push({ user_id: uid, name: 'app', data: this.settingsData(), updated_at: sbIso(M.setAt) || at });
     }
     if (inv.length) await this.up('invoices', inv, 'user_id,key');
     if (lines.length) await this.up('line_items', lines, 'user_id,invoice_key,line_no');
@@ -4258,13 +4317,15 @@ const Cloud = {
         this.all('settings', 'name,data,updated_at', ['name'])]);
       const M = this.meta, st = Lib.store, linesOf = {}, put = {}, drop = [], flagOps = [], push = [];
       for (const l of rLines) (linesOf[l.invoice_key] = linesOf[l.invoice_key] || []).push(l);
-      const seenInv = new Set();
+      const seenInv = new Set(), lim = this.limited(), me = this.user && this.user.id;
       for (const r of rInv) {
         seenInv.add(r.key);
         const loc = st.invoices[r.key], pend = this.dirty['inv:' + r.key];
         const la = loc ? sbTime(loc.updated || loc.added) : (pend ? sbTime(pend.at) : 0), ra = sbTime(r.updated_at);
+        // staff may only change invoices they added in the last day; Supabase skipped anything else, so its copy stands
+        const mine = !lim || (r.created_by === me && Date.now() - sbTime(r.created_at) < 23.5 * 3600000);
         if (r.file_folder && !M.folders[r.key]) M.folders[r.key] = r.file_folder;
-        if (ra > la) {
+        if (ra > la || (!mine && la > ra)) {
           delete this.dirty['inv:' + r.key]; M.lc[r.key] = r.deleted ? 0 : (linesOf[r.key] || []).length;
           if (r.deleted) { if (loc) drop.push(r.key); continue; }
           const raw = { supplier: r.supplier, abn: r.abn, invoice_no: r.invoice_no, date: r.invoice_date || '', total: r.total == null ? null : +r.total, file: r.file_name, src: r.src,
@@ -4279,10 +4340,10 @@ const Cloud = {
       for (const r of rFlag) {
         const p = r.kind === 'hide' ? 'hid' : 'ign', id = p + ':' + r.item_key; seenFlag.add(id);
         const la = sbTime(M.flagAt[id]), ra = sbTime(r.updated_at);
-        if (ra > la) { flagOps.push([p, r.item_key, !r.deleted]); M.flagAt[id] = r.updated_at; delete this.dirty[id]; }
+        if (ra > la || (lim && p === 'hid' && la > ra)) { flagOps.push([p, r.item_key, !r.deleted]); M.flagAt[id] = r.updated_at; delete this.dirty[id]; }
         else if (la > ra) push.push(id);
       }
-      for (const [p, set] of [['ign', st.ignored || {}], ['hid', st.hidden || {}]]) for (const k of Object.keys(set)) if (!seenFlag.has(p + ':' + k)) push.push(p + ':' + k);
+      for (const [p, set] of [['ign', st.ignored || {}], ['hid', st.hidden || {}]]) for (const k of Object.keys(set)) if (!seenFlag.has(p + ':' + k) && !(lim && p === 'hid')) push.push(p + ':' + k);
       this.applying = true;
       try {
         if (drop.length || Object.keys(put).length || flagOps.length) {
@@ -4309,7 +4370,8 @@ const Cloud = {
         for (const t of S.templates) if (!seenTpl.has(t.id)) push.push('tpl:' + t.id);
         if (tplCh) { Store.saveLocal(); recheckDocs(); }
         const rs = rSet.find(r => r.name === 'app');
-        if (rs && sbTime(rs.updated_at) > sbTime(M.setAt)) { this.applySettings(rs.data || {}); M.setAt = rs.updated_at; M.setSig = JSON.stringify(this.settingsData()); delete this.dirty['set:app']; }
+        if (rs && (sbTime(rs.updated_at) > sbTime(M.setAt) || (lim && rs.updated_at !== M.setAt))) { this.applySettings(rs.data || {}); M.setAt = rs.updated_at; M.setSig = JSON.stringify(this.settingsData()); delete this.dirty['set:app']; }
+        else if (lim) delete this.dirty['set:app'];
         else if (!rs || sbTime(M.setAt) > sbTime(rs.updated_at)) push.push('set:app');
       } finally { this.applying = false; }
       const at = nowIso();
@@ -4369,8 +4431,10 @@ function sbBoxHtml() {
     : '<div class="row"><input id="sb-key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="' + (C.key ? 'Paste the new key' : 'Paste the anon or publishable key') + '" aria-describedby="sb-keynote"><button class="btn small primary" type="button" data-set="sb-savekey" disabled>Save key</button>' +
       (C.key ? '<button class="btn small" type="button" data-set="sb-cancelkey">Cancel</button>' : '') + '</div>';
   let acct = '';
-  if (C.key && C.user) {
-    acct = '<div class="keysaved sbwho"><span>Signed in as <b>' + esc(C.user.email || 'this account') + '</b></span><button class="btn small" type="button" data-set="sb-signout">Sign out</button></div>' +
+  if (C.key && C.user && C.checked && !C.role) {
+    acct = '<div class="keysaved sbwho"><span><b>' + esc(C.user.email || 'This account') + '</b> is not on the kitchen staff list.</span><button class="btn small" type="button" data-set="sb-signout">Sign out</button></div>';
+  } else if (C.key && C.user) {
+    acct = '<div class="keysaved sbwho"><span>Signed in as <b>' + esc(C.user.email || 'this account') + '</b>' + (C.role ? ' (' + (C.isAdmin() ? 'admin' : 'staff') + ')' : '') + '</span><button class="btn small" type="button" data-set="sb-signout">Sign out</button></div>' +
       '<p class="row" id="sb-state">' + sbStateHtml() + '</p>' +
       '<div class="row"><button class="btn small' + (C.meta.uploadedAt ? '' : ' primary') + '" type="button" data-set="sb-upload">' + (C.meta.uploadedAt ? 'Upload everything again' : 'Upload existing data') + '</button><button class="btn small" type="button" data-set="sb-pull">Load from Supabase</button></div>' +
       '<p class="note">' + (C.meta.uploadedAt ? 'Everything in this browser was uploaded on ' + esc(niceDate(C.meta.uploadedAt.slice(0, 10))) + '. ' : 'Upload existing data copies the library, layouts, ignored items and settings already in this browser. ') + 'After that, every change is copied in the background, and this page loads the newest copy when it opens.</p>';
@@ -4380,7 +4444,7 @@ function sbBoxHtml() {
       '<div class="row"><input id="sb-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="Code from the email" aria-label="Code from the email"><button class="btn small primary" type="button" data-set="sb-verify">Sign in</button><button class="btn small" type="button" data-set="sb-again">Use another email</button></div>';
   } else if (C.key) {
     acct = '<div class="row"><input id="sb-email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com" value="' + esc(C.email || '') + '" aria-label="Email to sign in with"><button class="btn small primary" type="button" data-set="sb-send">Email me a sign-in link</button></div>' +
-      '<p class="note">Signing in joins the shared kitchen library: every staff account sees and edits the same invoices and items.</p>';
+      '<p class="note">Only emails on the kitchen staff list can sign in. Everyone signed in sees the same library and can add invoices to it.</p>';
   }
   const where = !S.standalone ? '<p class="pill warn">Inside Claude this page can’t reach Supabase. Sync works in your own copy of the page: the invoice_scraper.html file on your own site, or opened in Chrome, Edge or Safari.</p>'
     : location.protocol === 'file:' && C.key && !C.user ? '<p class="note">This page is opened from a file, so a sign-in link can’t come back to it. Open the page from its web address to sign in with the link, or type the code from the email.</p>' : '';
@@ -4392,7 +4456,7 @@ function renderSb(msg) {
   const box = $('#sb-box'); if (box) box.innerHTML = sbBoxHtml();
   const gv = $('#g-via'); if (gv) gv.innerHTML = gemViaHtml();
   const ck = $('#settings [data-set="check"]'); if (ck) ck.disabled = !Gem.can() && !Cloud.ready();
-  renderSyncPill();
+  renderSyncPill(); renderGate();
 }
 function sbSetKey(v) {
   const p = sbKeyProblem(v);
@@ -4420,7 +4484,7 @@ async function sbAct(act) {
     if (!(await C.connect())) { renderSb(C.err || 'Supabase could not be reached.'); return; }
     const redirect = /^https?:/.test(location.protocol) ? location.origin + location.pathname : undefined;
     try {
-      const { error } = await C.sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true, emailRedirectTo: redirect } });
+      const { error } = await C.sb.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo: redirect } });
       if (error) throw error;
       C.sentTo = email; renderSb('');
     } catch (err) { renderSb(C.sayAuth(err)); }
@@ -4434,7 +4498,7 @@ async function sbAct(act) {
     return;
   }
   if (act === 'sb-again') { C.sentTo = ''; renderSb(''); return; }
-  if (act === 'sb-signout') { await C.disconnect(); renderSb('Signed out. The data in this browser is kept and still works offline.'); renderStatus(); return; }
+  if (act === 'sb-signout') { await signOutAll(); renderSb('Signed out.'); return; }
   if (act === 'sb-pull') { renderSb('Loading from Supabase…'); await C.syncNow(); renderSb(C.state === 'synced' ? 'Up to date with Supabase.' : ''); return; }
   if (act === 'sb-upload') {
     renderSb('Uploading…');
@@ -4442,7 +4506,119 @@ async function sbAct(act) {
     renderSb(ok ? 'Uploaded ' + n + ' invoice' + pl(n) + ' and ' + S.templates.length + ' layout' + pl(S.templates.length) + '.' : (C.err || 'The upload will continue when Supabase can be reached.'));
   }
 }
-window.addEventListener('online', () => { if (Gem.server === false && Gem.serverWhy === 'network') Gem.server = null; if (Cloud.ready()) Cloud.syncNow(); else if (Cloud.key && !Cloud.sb) Cloud.connect(); });
+async function signOutAll() {
+  const C = Cloud;
+  C.meta.role = ''; C.meta.roleEmail = ''; C.saveMeta();
+  await C.disconnect(); C.sentTo = ''; Staff.list = null; Staff.msg = '';
+  if (!$('#settings').hidden) closeSettings();
+  renderSb(); renderAll();
+}
+
+/* sign-in screen: with a Supabase key, the page opens only for people on the staff list */
+function gateShown() { return S.standalone && !!Cloud.key && !(Cloud.user && Cloud.role) && !Cloud.offlinePass(); }
+function gateHtml() {
+  const C = Cloud, msg = C.gateMsg ? '<p class="note" aria-live="polite">' + esc(hideKey(C.gateMsg)) + '</p>' : '';
+  const down = C.state === 'error' || C.state === 'offline';
+  let body;
+  if (!C.booted) body = '<p class="note">Checking sign-in…</p>';
+  else if (C.user && C.checked && !C.role) body = '<p><b>' + esc(C.user.email) + '</b> is not on the kitchen staff list. Ask an admin to add this email, then sign in again.</p>' +
+    '<div class="row"><button class="btn primary" type="button" data-gate="retry">Check again</button><button class="btn" type="button" data-gate="signout">Sign out</button></div>';
+  else if (C.user) body = down
+    ? '<p class="pill bad">' + esc(hideKey(C.err || 'Supabase could not be reached.')) + '</p><div class="row"><button class="btn primary" type="button" data-gate="retry">Try again</button><button class="btn" type="button" data-gate="signout">Sign out</button></div>'
+    : '<p class="note">Checking access for ' + esc(C.user.email) + '…</p>';
+  else if (C.sentTo) body = '<p class="note">We sent a sign-in email to <b>' + esc(C.sentTo) + '</b>. Type the code from it here, or open its link in this browser.</p>' +
+    '<div class="row"><input id="gate-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="Code from the email" aria-label="Code from the email"><button class="btn primary" type="button" data-gate="verify">Sign in</button></div>' +
+    '<div class="row"><button class="btn small" type="button" data-gate="send">Send a new email</button><button class="btn small" type="button" data-gate="again">Use another email</button></div>';
+  else body = (down && C.err ? '<p class="pill warn">' + esc(hideKey(C.err)) + '</p>' : '') +
+    '<div class="row"><input id="gate-email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com" value="' + esc(C.email || '') + '" aria-label="Your work email"><button class="btn primary" type="button" data-gate="send">Email me a code</button></div>' +
+    '<p class="note">Only emails on the kitchen staff list can sign in. Ask an admin if yours is not on it.</p>';
+  return '<div class="card"><h2 id="gateTitle">Invoice Scraper</h2><p class="note">Sign in to see the kitchen library and add invoices to it.</p>' + body + msg + '</div>';
+}
+function renderGate(force) {
+  const g = $('#gate'); if (!g) return;
+  const show = gateShown();
+  if (!show) { if (!g.hidden) { g.hidden = true; g.innerHTML = ''; renderGate.sig = ''; } return; }
+  const C = Cloud, sig = [C.booted, C.user && C.user.email, C.checked, C.role, C.sentTo, C.gateMsg, C.state === 'error' || C.state === 'offline', C.err].join('|');
+  if (!force && !g.hidden && sig === renderGate.sig) return;     // re-rendering would wipe what is being typed
+  renderGate.sig = sig; g.innerHTML = gateHtml(); g.hidden = false;
+  const f = $('#gate-code') || $('#gate-email'); if (f && !f.value) setTimeout(() => f.focus(), 30);
+}
+async function gateAct(act) {
+  const C = Cloud, say = m => { C.gateMsg = m; renderGate(true); };
+  if (act === 'send') {
+    const e = $('#gate-email'), email = e ? e.value.trim() : C.sentTo; C.email = email;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return say('Type your email address.');
+    say('Sending…');
+    if (!(await C.connect())) return say(C.err || 'Supabase could not be reached.');
+    const redirect = /^https?:/.test(location.protocol) ? location.origin + location.pathname : undefined;
+    try {
+      const { error } = await C.sb.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo: redirect } });
+      if (error) throw error;
+      C.sentTo = email; say('');
+    } catch (err) { say(C.sayAuth(err)); }
+    return;
+  }
+  if (act === 'verify') {
+    const c = $('#gate-code'), token = c ? c.value.replace(/\s/g, '') : '';
+    if (!/^\d{6,10}$/.test(token)) return say('Type the code from the email.');
+    say('Signing in…');
+    try { const { data, error } = await C.sb.auth.verifyOtp({ email: C.sentTo, token, type: 'email' }); if (error) throw error; C.gateMsg = ''; C.authed(data && data.session); }
+    catch (err) { say(/expired|invalid/i.test(String(err && err.message)) ? 'That code is wrong or has expired. Send a new email.' : C.say(err)); }
+    return;
+  }
+  if (act === 'again') { C.sentTo = ''; return say(''); }
+  if (act === 'retry') { C.gateMsg = ''; if (!C.sb) await C.connect(); else await C.recheck(); renderGate(true); return; }
+  if (act === 'signout') { await signOutAll(); return say(''); }
+}
+$('#gate').addEventListener('click', e => { const b = e.target.closest('button[data-gate]'); if (b && !b.disabled) gateAct(b.dataset.gate); });
+$('#gate').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const act = { 'gate-email': 'send', 'gate-code': 'verify' }[e.target.id];
+  if (act) { e.preventDefault(); gateAct(act); }
+});
+
+/* staff list, for admins; changes go through the staff-admin Edge Function */
+const Staff = { list: null, msg: '', loading: false, armed: '' };
+function staffBoxHtml() {
+  if (!Cloud.isAdmin()) return '';
+  if (!Staff.list) { if (!Staff.loading) staffCall({ op: 'list' }); return '<p class="note">Loading the staff list…</p>'; }
+  const me = String(Cloud.user && Cloud.user.email || '').toLowerCase();
+  const opt = r => ['staff', 'admin'].map(v => '<option value="' + v + '"' + (v === r ? ' selected' : '') + '>' + (v === 'admin' ? 'Admin' : 'Staff') + '</option>').join('');
+  const rows = Staff.list.map(s => {
+    const self = s.email === me;
+    return '<div class="staffrow"><span class="who">' + esc(s.email) + (self ? ' (you)' : '') + '</span>' +
+      '<select data-staff-role="' + esc(s.email) + '" aria-label="Role for ' + esc(s.email) + '"' + (self || Staff.loading ? ' disabled' : '') + '>' + opt(s.role) + '</select>' +
+      (self ? '' : '<button class="btn small danger" type="button" data-set="staff-rm" data-email="' + esc(s.email) + '"' + (Staff.loading ? ' disabled' : '') + '>' + (Staff.armed === s.email ? 'Tap again to remove' : 'Remove') + '</button>') + '</div>';
+  }).join('');
+  return '<div>' + rows + '</div>' +
+    '<div class="row"><input id="staff-email" type="email" inputmode="email" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="new.person@example.com" aria-label="Email to add"><select id="staff-newrole" aria-label="Role for the new person">' + opt('staff') + '</select>' +
+    '<button class="btn small primary" type="button" data-set="staff-add"' + (Staff.loading ? ' disabled' : '') + '>Add</button></div>' +
+    '<p class="note">Staff can view the library and add invoices to it. Admins can also change and delete library records, change shared settings and manage this list. A new person signs in with their email and gets a code. Removing someone signs them out of the library straight away.</p>' +
+    (Staff.msg ? '<p class="note" aria-live="polite">' + esc(hideKey(Staff.msg)) + '</p>' : '');
+}
+function renderStaff() { const b = $('#staff-box'); if (b) b.innerHTML = staffBoxHtml(); }
+async function staffCall(body, done) {
+  Staff.loading = true; Staff.armed = ''; if (body.op !== 'list') { Staff.msg = 'Saving…'; renderStaff(); }
+  try {
+    const r = await Cloud.callFn('staff-admin', body);
+    Staff.list = Array.isArray(r.staff) ? r.staff : []; Staff.msg = done || '';
+  } catch (e) { Staff.list = Staff.list || []; Staff.msg = Cloud.say(e); }
+  Staff.loading = false; renderStaff();
+}
+function staffAct(act, b) {
+  if (act === 'staff-add') {
+    const e = $('#staff-email'), email = e ? e.value.trim().toLowerCase() : '', r = $('#staff-newrole'), role = r && r.value === 'admin' ? 'admin' : 'staff';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { Staff.msg = 'Type the email address to add.'; renderStaff(); return; }
+    staffCall({ op: 'add', email, role }, email + ' was added as ' + role + '. They can sign in now with that email.');
+    return;
+  }
+  if (act === 'staff-rm') {
+    const email = b.dataset.email;
+    if (Staff.armed !== email) { Staff.armed = email; renderStaff(); clearTimeout(staffAct.t); staffAct.t = setTimeout(() => { Staff.armed = ''; renderStaff(); }, 4000); return; }
+    clearTimeout(staffAct.t); staffCall({ op: 'remove', email }, email + ' was removed.');
+  }
+}
+window.addEventListener('online', () => { if (Gem.server === false && Gem.serverWhy === 'network') Gem.server = null; if (Cloud.ready()) Cloud.syncNow(); else if (Cloud.key && !Cloud.sb) Cloud.connect(); else if (Cloud.user && !Cloud.checked) Cloud.recheck(); });
 window.addEventListener('offline', () => { if (Cloud.user) Cloud.setState('offline', ''); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && Cloud.ready() && Date.now() - sbTime(Cloud.meta.pulledAt) > 300000) Cloud.syncNow(); });
 
@@ -4485,6 +4661,7 @@ function renderSettings(msg) {
     '<h3 class="sec">Supabase copy</h3>' +
     '<p class="note">Everything stays in this browser and works offline. With a key and a sign-in, each change is also copied to your Supabase project, and other devices load it from there.</p>' +
     '<div id="sb-box">' + sbBoxHtml() + '</div>' +
+    (Cloud.isAdmin() ? '<h3 class="sec">Staff</h3><div id="staff-box">' + staffBoxHtml() + '</div>' : '') +
     '<h3 class="sec">Invoice folder</h3>' + folder +
     '<h3 class="sec">Scanning with Gemini</h3>' +
     '<p class="note">When a page is a picture, or its text can’t be read, Gemini looks at it, places the boxes and reads the line items. On pages with readable text the values still come from the text, so they stay exact.</p>' +
@@ -4516,6 +4693,7 @@ $('#settings').addEventListener('click', async e => {
   const b = e.target.closest('button[data-set]'); if (!b) return;
   const act = b.dataset.set, key = $('#g-key');
   if (act.startsWith('sb-')) return sbAct(act);
+  if (act.startsWith('staff-')) return staffAct(act, b);
   if (act === 'close') return closeSettings();
   if (act === 'replace') { S.keyEdit = true; renderSettings(''); const k = $('#g-key'); if (k) k.focus(); return; }
   if (act === 'cancelkey') { S.keyEdit = false; renderSettings(''); return; }
@@ -4536,7 +4714,8 @@ $('#settings').addEventListener('click', async e => {
 });
 $('#settings').addEventListener('change', e => {
   const t = e.target;
-  if (t.id === 'g-key' || t.id === 'sb-key' || t.id === 'sb-email' || t.id === 'sb-code') return;
+  if (t.id === 'g-key' || t.id === 'sb-key' || t.id === 'sb-email' || t.id === 'sb-code' || t.id === 'staff-email' || t.id === 'staff-newrole') return;
+  if (t.dataset.staffRole) { const email = t.dataset.staffRole; staffCall({ op: 'role', email, role: t.value }, email + ' is now ' + (t.value === 'admin' ? 'an admin' : 'staff') + '.'); return; }
   if (t.id === 'sb-url') {
     const v = t.value.trim().replace(/\/+$/, '');
     if (!/^https:\/\/[\w.\-]+(:\d+)?$/.test(v)) { t.value = Cloud.url; renderSb('The project URL looks like https://your-project.supabase.co'); return; }
@@ -4555,7 +4734,7 @@ $('#settings').addEventListener('input', e => {
   if (btn) { const sb = $('#settings [data-set="' + btn + '"]'); if (sb) sb.disabled = !e.target.value.trim(); }
 });
 $('#settings').addEventListener('keydown', e => {
-  const btn = { 'g-key': 'savekey', 'sb-key': 'sb-savekey', 'sb-email': 'sb-send', 'sb-code': 'sb-verify' }[e.target.id];
+  const btn = { 'g-key': 'savekey', 'sb-key': 'sb-savekey', 'sb-email': 'sb-send', 'sb-code': 'sb-verify', 'staff-email': 'staff-add' }[e.target.id];
   if (btn && e.key === 'Enter') { e.preventDefault(); const sb = $('#settings [data-set="' + btn + '"]'); if (sb && !sb.disabled) sb.click(); }
 });
 // the key never appears in a message, whatever an error or a server says
@@ -4630,7 +4809,7 @@ async function initCaps() {
   try { S.autoTpl = localStorage.getItem(AUTO_TPL_KEY) !== '0'; } catch (e) { S.autoTpl = true; }
   restoreMob(); applyMob(); markNav();
   Files.load().then(() => { renderStatus(); if (S.tab === 'details') renderDetails(); });
-  Cloud.load(); renderSyncPill(); if (Cloud.key) Cloud.connect();
+  Cloud.load(); renderSyncPill(); renderGate(); if (Cloud.key) Cloud.connect();
   // a sign-in link opened in a browser that has no key yet: the tokens stay in the address until the key is pasted
   else if (/access_token=/.test(location.hash)) { Cloud.msg = 'To finish signing in on this browser, paste the Supabase anon or publishable key here once.'; setMob('settings'); setTimeout(() => { const k = $('#sb-key'); if (k) k.focus(); }, 60); }
   else if (sbHashErr(location.hash)) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }

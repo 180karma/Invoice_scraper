@@ -4,11 +4,15 @@
 --
 -- Shared kitchen library: all signed-in staff sync the same rows.
 -- user_id on data tables is the kitchen library id from app_meta (not each person's auth uid).
--- Row-level security: any authenticated user may read/write the kitchen library only.
+-- Only emails in public.staff can use the library:
+--   staff  view everything and add invoices, layouts and ignored items. They can also correct an
+--          invoice they added themselves for 24 hours. Other edits and deletes are skipped.
+--   admin  can also edit and delete anything, change shared settings, and manage staff
+--          (through the staff-admin Edge Function).
 -- updated_at is set by the app from its local edit time, so devices merge newest-wins.
 -- deleted = true is a tombstone: it tells other devices a row was removed.
 
--- app_meta: kitchen-wide settings (library id). Authenticated users may read; only SQL/admin writes.
+-- app_meta: kitchen-wide settings (library id). Staff may read; only SQL writes.
 create table if not exists public.app_meta (
   key   text primary key,
   value text not null
@@ -17,9 +21,44 @@ insert into public.app_meta (key, value)
 values ('library_user_id', gen_random_uuid()::text)
 on conflict (key) do nothing;
 
+-- staff: who may sign in to the kitchen library. Written only by the staff-admin Edge Function.
+create table if not exists public.staff (
+  email      text primary key check (email = lower(email) and position('@' in email) > 1),
+  role       text not null default 'staff' check (role in ('admin', 'staff')),
+  created_at timestamptz not null default now()
+);
+-- the first admin; change this email before running on another kitchen's project
+insert into public.staff (email, role) values ('180karma@gmail.com', 'admin') on conflict (email) do nothing;
+
+-- role helpers for the policies, in a schema the REST API does not expose
+create schema if not exists private;
+revoke all on schema private from public, anon;
+grant usage on schema private to authenticated;
+create or replace function private.staff_role() returns text
+language sql stable security definer set search_path = ''
+as $$ select s.role from public.staff s where s.email = lower(coalesce((select auth.jwt()) ->> 'email', '')) $$;
+create or replace function private.is_staff() returns boolean
+language sql stable security definer set search_path = ''
+as $$ select private.staff_role() is not null $$;
+create or replace function private.is_admin() returns boolean
+language sql stable security definer set search_path = ''
+as $$ select coalesce(private.staff_role() = 'admin', false) $$;
+create or replace function private.kitchen_library_id() returns uuid
+language sql stable security definer set search_path = ''
+as $$ select value::uuid from public.app_meta where key = 'library_user_id' $$;
+revoke execute on function private.staff_role(), private.is_staff(), private.is_admin(), private.kitchen_library_id() from public, anon;
+grant execute on function private.staff_role(), private.is_staff(), private.is_admin(), private.kitchen_library_id() to authenticated;
+
+alter table public.staff enable row level security;
+drop policy if exists "staff read" on public.staff;
+create policy "staff read" on public.staff for select to authenticated
+  using (email = lower(coalesce((select auth.jwt()) ->> 'email', '')) or (select private.is_admin()));
+revoke all on public.staff from anon, authenticated;
+grant select on public.staff to authenticated;
+
 alter table public.app_meta enable row level security;
 drop policy if exists "app_meta read" on public.app_meta;
-create policy "app_meta read" on public.app_meta for select to authenticated using (true);
+create policy "app_meta read" on public.app_meta for select to authenticated using ((select private.is_staff()));
 revoke all on public.app_meta from anon;
 grant select on public.app_meta to authenticated;
 
@@ -74,8 +113,12 @@ create table if not exists public.invoices (
   added_at     timestamptz,
   deleted      boolean not null default false,
   updated_at   timestamptz not null default now(),
+  created_by   uuid default auth.uid(),
+  created_at   timestamptz not null default now(),
   primary key (user_id, key)
 );
+alter table public.invoices add column if not exists created_by uuid default auth.uid();
+alter table public.invoices add column if not exists created_at timestamptz not null default now();
 
 -- line items: one row per invoice line. item_key + uom_key give one price series per item and unit
 -- (uom_key folds spellings of one unit together: ea/each, kg/kgs; each vs carton stay apart)
@@ -173,9 +216,9 @@ create or replace view public.price_history with (security_invoker = true) as
   join public.invoices i on i.user_id = l.user_id and i.key = l.invoice_key and not i.deleted
   order by l.item_key, l.uom_key, l.invoice_date;
 
--- row-level security: any signed-in staff member may use the kitchen library
+-- row-level security: staff on the list may use the kitchen library; shared settings are admin-only
 do $$
-declare t text;
+declare t text; who text; w text;
 begin
   foreach t in array array['suppliers', 'layouts', 'invoices', 'line_items', 'ignored_items', 'settings'] loop
     execute format('alter table public.%I enable row level security', t);
@@ -187,21 +230,102 @@ begin
     execute format('drop policy if exists "kitchen library insert" on public.%I', t);
     execute format('drop policy if exists "kitchen library update" on public.%I', t);
     execute format('drop policy if exists "kitchen library delete" on public.%I', t);
-    execute format(
-      'create policy "kitchen library select" on public.%I for select to authenticated using (user_id = (select value::uuid from public.app_meta where key = ''library_user_id''))',
-      t);
-    execute format(
-      'create policy "kitchen library insert" on public.%I for insert to authenticated with check (user_id = (select value::uuid from public.app_meta where key = ''library_user_id''))',
-      t);
-    execute format(
-      'create policy "kitchen library update" on public.%I for update to authenticated using (user_id = (select value::uuid from public.app_meta where key = ''library_user_id'')) with check (user_id = (select value::uuid from public.app_meta where key = ''library_user_id''))',
-      t);
-    execute format(
-      'create policy "kitchen library delete" on public.%I for delete to authenticated using (user_id = (select value::uuid from public.app_meta where key = ''library_user_id''))',
-      t);
+    who := case when t = 'settings' then '(select private.is_admin())' else '(select private.is_staff())' end;
+    w := format('user_id = (select private.kitchen_library_id()) and %s', who);
+    execute format('create policy "kitchen library select" on public.%I for select to authenticated using (user_id = (select private.kitchen_library_id()) and (select private.is_staff()))', t);
+    execute format('create policy "kitchen library insert" on public.%I for insert to authenticated with check (%s)', t, w);
+    execute format('create policy "kitchen library update" on public.%I for update to authenticated using (%s) with check (%s)', t, w, w);
+    execute format('create policy "kitchen library delete" on public.%I for delete to authenticated using (%s)', t, w);
     execute format('revoke all on public.%I from anon', t);
     execute format('grant select, insert, update, delete on public.%I to authenticated', t);
   end loop;
 end $$;
+
+-- Staff are add-only. A change they may not make is skipped (the trigger returns null) rather than
+-- raising an error, so one refused row never blocks the rest of a sync. Their next sync reloads
+-- the server's copy.
+-- no signed-in user (SQL editor, service role) and admins pass every guard
+create or replace function public.guard_invoices() returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+begin
+  if auth.uid() is null or private.is_admin() then
+    if tg_op = 'DELETE' then return old; end if;
+    return new;
+  end if;
+  if tg_op = 'INSERT' then
+    if new.deleted then return null; end if;
+    new.created_by := auth.uid(); new.created_at := now();
+    return new;
+  end if;
+  if tg_op = 'DELETE' then return null; end if;
+  -- staff may correct (or withdraw) an invoice they added in the last 24 hours
+  if old.created_by is distinct from auth.uid() or old.created_at < now() - interval '24 hours' then return null; end if;
+  new.created_by := old.created_by; new.created_at := old.created_at;
+  return new;
+end $$;
+
+create or replace function public.guard_line_items() returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+declare u uuid; k text; by_ uuid; at_ timestamptz;
+begin
+  if tg_op = 'DELETE' then u := old.user_id; k := old.invoice_key; else u := new.user_id; k := new.invoice_key; end if;
+  if not (auth.uid() is null or private.is_admin()) then
+    select i.created_by, i.created_at into by_, at_ from public.invoices i where i.user_id = u and i.key = k;
+    if by_ is distinct from auth.uid() or at_ < now() - interval '24 hours' then return null; end if;
+  end if;
+  if tg_op = 'DELETE' then return old; end if;
+  return new;
+end $$;
+
+-- layouts and suppliers: staff add and update, but cannot delete
+create or replace function public.guard_tombstones() returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+begin
+  if auth.uid() is null or private.is_admin() then
+    if tg_op = 'DELETE' then return old; end if;
+    return new;
+  end if;
+  if tg_op = 'DELETE' then return null; end if;
+  if new.deleted then
+    if tg_op = 'INSERT' then return null; end if;
+    if not old.deleted then return null; end if;
+  end if;
+  return new;
+end $$;
+
+-- ignored items: staff may ignore and un-ignore on scans; hiding items from the library is admin-only
+create or replace function public.guard_ignored() returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+begin
+  if auth.uid() is null or private.is_admin() then
+    if tg_op = 'DELETE' then return old; end if;
+    return new;
+  end if;
+  if tg_op = 'DELETE' then return null; end if;
+  if new.kind = 'hide' then return null; end if;
+  return new;
+end $$;
+
+drop trigger if exists guard on public.invoices;
+create trigger guard before insert or update or delete on public.invoices for each row execute function public.guard_invoices();
+drop trigger if exists guard on public.line_items;
+create trigger guard before insert or update or delete on public.line_items for each row execute function public.guard_line_items();
+drop trigger if exists guard on public.layouts;
+create trigger guard before insert or update or delete on public.layouts for each row execute function public.guard_tombstones();
+drop trigger if exists guard on public.suppliers;
+create trigger guard before insert or update or delete on public.suppliers for each row execute function public.guard_tombstones();
+drop trigger if exists guard on public.ignored_items;
+create trigger guard before insert or update or delete on public.ignored_items for each row execute function public.guard_ignored();
+revoke execute on function public.guard_invoices(), public.guard_line_items(), public.guard_tombstones(), public.guard_ignored() from public, anon, authenticated;
 revoke all on public.price_history from anon;
 grant select on public.price_history to authenticated;
+
+-- an earlier version of this file put the role helpers in public, where the REST API could call them
+drop function if exists public.is_admin();
+drop function if exists public.is_staff();
+drop function if exists public.kitchen_library_id();
+drop function if exists public.staff_role();

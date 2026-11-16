@@ -10,10 +10,13 @@ Drop in supplier invoices (PDF or image) to extract line items, header fields, a
 
 Signed-in staff share **one** Supabase library (invoices, items, layouts, settings). The library id lives in `app_meta.library_user_id` (created by [`supabase-schema.sql`](supabase-schema.sql)); the page loads it after sign-in and syncs every account to that id.
 
-- Run `supabase-schema.sql` once in the Supabase SQL editor (safe to re-run).
-- Staff open the GitHub Pages site, email-sign-in under Settings → Supabase copy, then scan or upload as usual.
-- Prefer **invite-only** users (Authentication → Users) if the Pages URL is public: anyone who can sign up joins the same kitchen data. Or turn on “Allow new users to sign up” only while onboarding trusted staff.
-- Email provider must be enabled under Authentication → Sign In / Providers.
+- Run `supabase-schema.sql` once in the Supabase SQL editor (safe to re-run). It creates the `staff` list and makes `180karma@gmail.com` the first admin; change that line for another kitchen.
+- The page opens on a sign-in screen. Only emails on the staff list can sign in; they get a code by email.
+- **Staff** see the whole library and add invoices to it with the invoice reader. They can correct an invoice they added themselves for 24 hours. They can't change or delete anything else.
+- **Admins** can also change and delete library records, hide items, change shared settings, and add or remove people under Settings → Staff.
+- The staff list is managed by the Edge Function `supabase/functions/staff-admin`. Supabase gives it the service key, which never reaches the browser. Adding someone also creates their sign-in account, and removing them deletes it.
+- The limits are enforced in the database by row-level security and triggers, not only by hiding buttons.
+- The Email provider must be enabled under Authentication → Sign In / Providers. Turning off “Allow new users to sign up” there is recommended. The page never signs people up by itself.
 
 ## Keys
 

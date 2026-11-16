@@ -1,6 +1,6 @@
 // Calls Gemini for the invoice scraper with the key held in Supabase secrets, so the key never reaches a browser.
-// Only signed-in users of this project may call it. Deployed with verify_jwt off: the token is checked here
-// against Supabase Auth, which also works with the newer asymmetric JWT signing keys.
+// Only signed-in users on the kitchen staff list may call it. Deployed with verify_jwt off: the token is checked
+// here against Supabase Auth, which also works with the newer asymmetric JWT signing keys.
 //
 // POST { op: "models" }                        -> Gemini's model list
 // POST { op: "generate", model, body }         -> Gemini generateContent for that model
@@ -25,7 +25,7 @@ function scrub(text: string, key: string): string {
   return text.replace(/AIza[0-9A-Za-z_\-]{20,}/g, '••••');
 }
 
-async function signedInUser(req: Request): Promise<{ id: string; email: string } | null> {
+async function signedInUser(req: Request): Promise<{ id: string; email: string; token: string; apikey: string } | null> {
   const auth = req.headers.get('authorization') || '';
   const token = /^Bearer\s+(.+)$/i.exec(auth)?.[1] || '';
   if (!token || /^sb_/.test(token)) return null;
@@ -35,7 +35,18 @@ async function signedInUser(req: Request): Promise<{ id: string; email: string }
   const r = await fetch(url + '/auth/v1/user', { headers: { apikey, Authorization: 'Bearer ' + token } });
   if (!r.ok) return null;
   const u = await r.json().catch(() => null);
-  return u && typeof u.id === 'string' && u.id ? { id: u.id, email: String(u.email || '').toLowerCase() } : null;
+  return u && typeof u.id === 'string' && u.id ? { id: u.id, email: String(u.email || '').toLowerCase(), token, apikey } : null;
+}
+
+// the staff table's row-level security lets each person read only their own row
+async function onStaffList(user: { email: string; token: string; apikey: string }): Promise<boolean> {
+  const url = (Deno.env.get('SUPABASE_URL') || '').replace(/\/+$/, '');
+  const r = await fetch(url + '/rest/v1/staff?select=role&email=eq.' + encodeURIComponent(user.email), {
+    headers: { apikey: user.apikey, Authorization: 'Bearer ' + user.token },
+  });
+  if (!r.ok) return false;
+  const rows = await r.json().catch(() => []);
+  return Array.isArray(rows) && rows.length > 0;
 }
 
 function allowed(email: string): boolean {
@@ -52,7 +63,7 @@ Deno.serve(async (req: Request) => {
 
   const user = await signedInUser(req).catch(() => null);
   if (!user) return fail(401, 'unauthorized', 'Sign in to scan with Gemini.');
-  if (!allowed(user.email)) return fail(403, 'not_allowed', 'This account may not scan with Gemini.');
+  if (!allowed(user.email) || !(await onStaffList(user).catch(() => false))) return fail(403, 'not_allowed', 'This account is not on the kitchen staff list.');
 
   if (+(req.headers.get('content-length') || 0) > MAX_BODY) return fail(413, 'too_big', 'The pages are too large to send.');
   let msg: { op?: string; model?: string; body?: Record<string, unknown> };
