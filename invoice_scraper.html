@@ -189,7 +189,10 @@ h3.sec { margin: 16px 0 6px; font: 600 13px/1.2 var(--font-display); letter-spac
 .opts { display: flex; flex-direction: column; gap: 8px; }
 .opts label { display: flex; gap: 8px; align-items: center; }
 .opts select { height: 32px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 0 6px; }
-textarea.csv { width: 100%; min-height: 150px; height: 190px; resize: vertical; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 10px; font: 400 12.5px/1.45 var(--font-data); white-space: pre; overflow: auto; }
+details.csvx { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 8px 10px; }
+details.csvx > summary { cursor: pointer; font: 600 13px/1.3 var(--font-display); letter-spacing: .03em; text-transform: uppercase; color: var(--muted); }
+details.csvx[open] > summary { margin-bottom: 8px; }
+details.csvx .row { margin-top: 8px; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .note { color: var(--muted); font-size: 13px; max-width: 60ch; }
 
@@ -415,11 +418,9 @@ a.contact:hover { background: var(--wash); text-decoration: underline; text-unde
   body[data-mob="details"] #tab-suppliers,
   body[data-mob="library"] #tab-items,
   body[data-mob="library"] #tab-details,
-  body[data-mob="library"] #tab-csv,
   body[data-mob="library"] #tab-suppliers,
   body[data-mob="suppliers"] #tab-items,
   body[data-mob="suppliers"] #tab-details,
-  body[data-mob="suppliers"] #tab-csv,
   body[data-mob="suppliers"] #tab-library { display: none; }
   .mnav { display: flex; position: fixed; z-index: 28; left: 0; right: 0; bottom: 0; gap: 1px; background: var(--surface); border-top: 1px solid var(--line); padding: 2px 2px calc(2px + env(safe-area-inset-bottom)); padding-left: calc(2px + env(safe-area-inset-left)); padding-right: calc(2px + env(safe-area-inset-right)); }
   .mnav button { flex: 1; min-width: 0; min-height: 40px; border: 0; border-radius: 8px; background: none; color: var(--muted); padding: 2px 1px; font: 600 11px/1.1 var(--font-display); letter-spacing: .02em; text-transform: uppercase; }
@@ -450,7 +451,7 @@ a.contact:hover { background: var(--wash); text-decoration: underline; text-unde
   .supfacts div { padding: 6px 8px; }
   .supfacts b { font-size: 14px; }
   .contacts.big .contact { min-height: 40px; font-size: 13px; }
-  input, select, textarea, [contenteditable="true"], .fld input, textarea.csv, #lib-q, .grid th select, .grp select, .grp input[type="text"] { font-size: 16px; }
+  input, select, textarea, [contenteditable="true"], .fld input, #lib-q, .grid th select, .grp select, .grp input[type="text"] { font-size: 16px; }
   .grp select, .grp input[type="text"] { height: 40px; }
   .pane, #lib-body, .tablewrap, .suplist { overflow-x: auto; }
   .grid td.rn { position: sticky; left: 0; z-index: 2; background: var(--surface); }
@@ -499,7 +500,6 @@ a.contact:hover { background: var(--wash); text-decoration: underline; text-unde
       <div class="tabs" role="tablist" aria-label="Results">
         <button role="tab" type="button" id="tab-items" aria-controls="pane-items" aria-selected="true"><span class="wide">Line </span>items<span class="n" id="n-items">0</span></button>
         <button role="tab" type="button" id="tab-details" aria-controls="pane-details" aria-selected="false">Details</button>
-        <button role="tab" type="button" id="tab-csv" aria-controls="pane-csv" aria-selected="false">CSV</button>
         <button role="tab" type="button" id="tab-library" aria-controls="pane-library" aria-selected="false">Library<span class="n" id="n-lib">0</span></button>
         <button role="tab" type="button" id="tab-suppliers" aria-controls="pane-suppliers" aria-selected="false">Suppliers<span class="n" id="n-sup">0</span></button>
         <span class="sp"></span>
@@ -508,7 +508,6 @@ a.contact:hover { background: var(--wash); text-decoration: underline; text-unde
       </div>
       <div class="pane" id="pane-items" role="tabpanel" aria-labelledby="tab-items"></div>
       <div class="pane" id="pane-details" role="tabpanel" aria-labelledby="tab-details" hidden></div>
-      <div class="pane" id="pane-csv" role="tabpanel" aria-labelledby="tab-csv" hidden></div>
       <div class="pane sheet-pane" id="pane-library" role="tabpanel" aria-labelledby="tab-library" hidden></div>
       <div class="pane" id="pane-suppliers" role="tabpanel" aria-labelledby="tab-suppliers" hidden></div>
     </section>
@@ -2745,7 +2744,7 @@ function renderItems() {
   if (ne) h += '<button class="link" type="button" data-act="reset-edits">Undo ' + ne + ' typed change' + (ne === 1 ? '' : 's') + '</button>';
   h += '<span>Tap a cell to correct it. Column headings choose what each column means in the CSV.</span>';
   if (doc.mode !== 'ai' && !doc.aiBusy) h += '<span>Rows look wrong? <button class="link" type="button" data-act="gem">Scan with Gemini</button>' + (S.caps.sample ? ' or <button class="link" type="button" data-act="ai">read with Claude</button>' : '') + '</span>';
-  h += '</div>';
+  h += '</div>' + csvBox();
   el.innerHTML = h;
 }
 const SRC = { zone: 'from its box', auto: 'found in the text', typed: 'typed', ai: 'read by Claude', gemini: 'read by Gemini', layout: 'from the saved layout' };
@@ -2791,21 +2790,18 @@ function fileSection(doc) {
 }
 function csvDocs() { const d = cur(); return S.opts.scope === 'all' ? S.docs : (d ? [d] : []); }
 function csvNow() { return Engine.buildCSV(csvDocs().map(d => ({ result: d.result })), { meta: S.opts.meta, clean: S.opts.clean, dateStyle: S.opts.dateStyle, contacts: S.opts.contacts }); }
-function renderCsv() {
-  const doc = cur(), el = $('#pane-csv');
-  if (!doc) { el.innerHTML = '<p class="empty">Open an invoice to build its CSV.</p>'; return; }
+function csvCount() { const c = csvNow(); return c.rows + ' row' + (c.rows === 1 ? '' : 's') + ', ' + c.head.length + ' columns'; }
+function csvBox() {
   if (S.docs.length < 2) S.opts.scope = 'this';
-  const csv = csvNow(), o = S.opts;
-  const canDl = S.standalone || !!S.caps.downloads;
-  el.innerHTML = '<div class="opts">' +
+  const o = S.opts, canDl = S.standalone || !!S.caps.downloads;
+  return '<details class="csvx" id="csvBox"' + (S.csvOpen ? ' open' : '') + '><summary>CSV export</summary><div class="opts">' +
     (S.docs.length > 1 ? '<label for="o-scope">Rows from <select id="o-scope"><option value="this"' + (o.scope === 'this' ? ' selected' : '') + '>this invoice</option><option value="all"' + (o.scope === 'all' ? ' selected' : '') + '>all ' + S.docs.length + ' open invoices</option></select></label>' : '') +
     '<label for="o-meta"><input type="checkbox" id="o-meta"' + (o.meta ? ' checked' : '') + '>Put supplier, invoice no. and date on every row</label>' +
     '<label for="o-clean"><input type="checkbox" id="o-clean"' + (o.clean ? ' checked' : '') + '>Plain numbers, without $ or thousands commas</label>' +
     '<label for="o-contacts"><input type="checkbox" id="o-contacts"' + (o.contacts ? ' checked' : '') + '>Add the supplier’s phone and email, as the last two columns</label>' +
     '<label for="o-date">Dates as <select id="o-date"><option value="iso"' + (o.dateStyle === 'iso' ? ' selected' : '') + '>2026-11-04</option><option value="dmy"' + (o.dateStyle === 'dmy' ? ' selected' : '') + '>04/11/2026</option><option value="mdy"' + (o.dateStyle === 'mdy' ? ' selected' : '') + '>11/04/2026</option></select></label>' +
-    '</div><div class="row"><button class="btn primary" type="button" data-act="copy-csv">Copy CSV</button>' + (canDl ? '<button class="btn" type="button" data-act="dl-csv">Download .csv</button>' : '') +
-    '<span class="note">' + csv.rows + ' row' + (csv.rows === 1 ? '' : 's') + ', ' + csv.head.length + ' columns</span></div>' +
-    '<textarea class="csv" id="csvText" readonly aria-label="CSV preview" wrap="off">' + esc(csv.text) + '</textarea>';
+    '</div><div class="row"><button class="btn primary small" type="button" data-act="copy-csv">Copy CSV</button>' + (canDl ? '<button class="btn small" type="button" data-act="dl-csv">Download .csv</button>' : '') +
+    '<span class="note" id="csvCount">' + csvCount() + '</span></div></details>';
 }
 function renderSuppliers() {
   const doc = cur(), el = $('#pane-suppliers');
@@ -2829,9 +2825,9 @@ function renderSuppliers() {
   if (S.templates.length) h += '<p class="note">' + (Store.where === 'page' ? 'Layouts are stored with this page, so they are there on your other devices too.' : 'Layouts are stored in this browser only.') + '</p>';
   el.innerHTML = h;
 }
-function renderTab() { ({ items: renderItems, details: renderDetails, csv: renderCsv, library: renderLibrary, suppliers: renderSuppliers })[S.tab](); syncCopyTableBtn(); }
+function renderTab() { ({ items: renderItems, details: renderDetails, library: renderLibrary, suppliers: renderSuppliers })[S.tab](); syncCopyTableBtn(); }
 function renderTabs() {
-  for (const t of ['items', 'details', 'csv', 'library', 'suppliers']) { $('#tab-' + t).setAttribute('aria-selected', String(S.tab === t)); $('#pane-' + t).hidden = S.tab !== t; }
+  for (const t of ['items', 'details', 'library', 'suppliers']) { $('#tab-' + t).setAttribute('aria-selected', String(S.tab === t)); $('#pane-' + t).hidden = S.tab !== t; }
   const d = cur(); $('#n-items').textContent = d ? d.result.rows.length : 0; $('#n-sup').textContent = S.templates.length; $('#n-lib').textContent = Lib.agg().items.length;
   syncCopyTableBtn();
 }
@@ -2918,8 +2914,9 @@ $('#panel').addEventListener('change', e => {
   }
   if (t.dataset.field) { const k = t.dataset.field; let v = t.value.trim(); if (k === 'abn') v = v.replace(/\D/g, ''); if (k === 'date' || k === 'due_date') { const d = Engine.parseDate(v, S.opts.mdy); if (d) v = d.iso; } doc.manual[k] = v; run(doc); renderAll(); return; }
   if (t.id === 'o-meta') S.opts.meta = t.checked; else if (t.id === 'o-clean') S.opts.clean = t.checked; else if (t.id === 'o-contacts') S.opts.contacts = t.checked; else if (t.id === 'o-date') S.opts.dateStyle = t.value; else if (t.id === 'o-scope') S.opts.scope = t.value; else return;
-  renderCsv();
+  const n = $('#csvCount'); if (n) n.textContent = csvCount();
 });
+$('#panel').addEventListener('toggle', e => { if (e.target.id === 'csvBox') S.csvOpen = e.target.open; }, true);
 $('#panel').addEventListener('focusout', e => {
   const td = e.target; if (!td.isContentEditable || td.dataset.i == null) return;
   const doc = cur(); if (!doc) return;
@@ -2955,14 +2952,13 @@ async function writeClipboard(text, okMsg) {
     const ok = document.execCommand('copy'); ta.remove();
     if (ok) { toast(okMsg); return true; }
   } catch (e) {}
-  const existing = $('#csvText');
-  if (existing && existing.value === text) { existing.focus(); existing.select(); try { if (document.execCommand('copy')) { toast(okMsg); return true; } } catch (e) {} }
   return false;
 }
 async function copyCsv() {
   const text = csvNow().text;
   if (await writeClipboard(text, 'CSV copied. Paste it into a spreadsheet.')) return;
-  toast('Copying is blocked here. The CSV text is selected: copy it by hand.');
+  if (S.standalone || S.caps.downloads) { toast('Copying is blocked here, so the CSV is downloaded instead.'); downloadCsv(); return; }
+  toast('Copying is blocked here.', 'bad');
 }
 function tsvCell(v) {
   v = v == null ? '' : String(v);
@@ -3918,7 +3914,7 @@ function setMob(tab, opts) {
   if (tab === 'library' || tab === 'suppliers') S.tab = tab;
   else if (tab === 'details') {
     if (opts.inner) S.tab = opts.inner;
-    else if (!['items', 'details', 'csv'].includes(S.tab)) S.tab = 'items';
+    else if (!['items', 'details'].includes(S.tab)) S.tab = 'items';
   }
   applyMob.was = true;
   applyMob(); markNav();
@@ -3934,7 +3930,7 @@ function restoreMob() {
   try { S.mob = localStorage.getItem(MOB_KEY) || 'viewer'; } catch (e) { S.mob = 'viewer'; }
   if (!MOB_TABS.includes(S.mob)) S.mob = 'viewer';
   if (S.mob === 'library' || S.mob === 'suppliers') S.tab = S.mob;
-  else if (S.mob === 'details' && !['items', 'details', 'csv'].includes(S.tab)) S.tab = 'items';
+  else if (S.mob === 'details' && !['items', 'details'].includes(S.tab)) S.tab = 'items';
 }
 
 /* ================= Supabase: every change is copied to the user's own rows, and pulled back newest-wins ================= */
@@ -4796,7 +4792,7 @@ stage.addEventListener('wheel', () => { S.touchedView = true; }, { passive: true
 async function initCaps() {
   if (S.standalone) return;
   const c = window.claude;
-  c.use('downloads').then(d => { if (d) { S.caps.downloads = d; if (S.tab === 'csv') renderCsv(); } }).catch(() => {});
+  c.use('downloads').then(d => { if (d) { S.caps.downloads = d; if (S.tab === 'items') renderItems(); } }).catch(() => {});
   c.use('sample').then(async s => { if (!s) return; let lim = null; try { lim = await s.limits(); } catch (e) {} if (lim && lim.images) { S.caps.sample = s; S.caps.img = lim.images; renderStatus(); renderTab(); } }).catch(() => {});
   c.use('db').then(db => { if (db) Store.attach(db); }).catch(() => {});
 }
