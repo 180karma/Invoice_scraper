@@ -3331,7 +3331,7 @@ function renderLibrary() {
     '<button class="btn small danger" type="button" data-act="lib-clear"' + off + '>' + (L.armed ? 'Tap again to delete everything' : 'Clear library') + '</button></div>' +
     (a.hidden ? '<p class="note">' + a.hidden + ' item' + pl(a.hidden) + ' hidden. <button class="link" type="button" data-act="lib-unhide">Show ' + (a.hidden === 1 ? 'it' : 'them') + ' again</button></p>' : '') +
     (a.ignored ? '<p class="note">' + a.ignored + ' item' + pl(a.ignored) + ' ignored on new invoices. <button class="link" type="button" data-act="lib-unignore">Scan ' + (a.ignored === 1 ? 'it' : 'them') + ' again</button></p>' : '') +
-    (Cloud.user ? '<p class="note">The library lives in this browser and is copied to Supabase for ' + esc(Cloud.user.email || 'your account') + '. Other devices that sign in load it from there.</p>'
+    (Cloud.user ? '<p class="note">The library lives in this browser and is copied to the shared kitchen library in Supabase (signed in as ' + esc(Cloud.user.email || 'this account') + '). Other staff who sign in see and edit the same invoices and items.</p>'
       : '<p class="note">The library lives in this browser’s local storage on this device. Another browser or device starts empty, and clearing site data erases it, so take a backup now and then, or turn on the Supabase copy in Settings.</p>');
   syncCopyTableBtn();
 }
@@ -3963,9 +3963,26 @@ const SB_ENV = (() => {
 const SB_HOME = SB_ENV.url || SB_URL;
 const Cloud = {
   KEY: 'invoice-scraper.supabase.v1', QKEY: 'invoice-scraper.supabase.queue.v1', MKEY: 'invoice-scraper.supabase.meta.v1',
-  url: SB_HOME, key: '', ownUrl: '', ownKey: '', keyFrom: '', sb: null, user: null, state: 'off', err: '', loaded: false, applying: false,
+  url: SB_HOME, key: '', ownUrl: '', ownKey: '', keyFrom: '', sb: null, user: null, libraryId: null, state: 'off', err: '', loaded: false, applying: false,
   sentTo: '', email: '', keyEdit: false, msg: '', dirty: {}, meta: null, tplSnap: {}, timer: 0, tries: 0, chain: Promise.resolve(), connecting: null,
   freshMeta() { return { uid: '', flagAt: {}, setAt: '', setSig: '', folders: {}, lc: {}, sup: {}, uploadedAt: '', pulledAt: '' }; },
+  // kitchen library id from app_meta (shared by all signed-in staff); not the person's auth uid
+  libraryUid() {
+    if (!this.libraryId) throw new Error('The shared kitchen library is not set up. Run supabase-schema.sql in Supabase.');
+    return this.libraryId;
+  },
+  async ensureLibraryId() {
+    if (this.libraryId) return this.libraryId;
+    if (!this.sb) throw new Error('Supabase is not connected.');
+    const { data, error } = await this.sb.from('app_meta').select('value').eq('key', 'library_user_id').maybeSingle();
+    if (error) throw error;
+    const v = data && typeof data.value === 'string' ? data.value.trim() : '';
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) {
+      throw new Error('The shared kitchen library is not set up. Run supabase-schema.sql in Supabase.');
+    }
+    this.libraryId = v.toLowerCase();
+    return this.libraryId;
+  },
   load() {
     try {
       const o = JSON.parse(localStorage.getItem(this.KEY) || 'null');
@@ -4068,12 +4085,18 @@ const Cloud = {
   },
   authed(session) {
     const u = session && session.user ? { id: session.user.id, email: session.user.email || '' } : null;
-    if ((u && u.id) === (this.user && this.user.id)) return;
+    if ((u && u.id) === (this.user && this.user.id) && (!u || this.libraryId)) return;
     this.user = u; Gem.server = null; Gem.serverWhy = '';
-    if (!u) { this.setState('off'); renderSb(); return; }
-    if (this.meta.uid !== u.id) { const keep = { flagAt: this.meta.flagAt, setAt: this.meta.setAt, setSig: this.meta.setSig, folders: this.meta.folders }; this.meta = Object.assign(this.freshMeta(), keep, { uid: u.id }); this.saveMeta(); }
+    if (!u) { this.libraryId = null; this.setState('off'); renderSb(); return; }
     this.sentTo = ''; renderSb(/^(Key saved|To finish signing in)/.test(this.msg) ? '' : null);
-    this.syncNow();
+    this.queue(async () => {
+      await this.ensureLibraryId();
+      if (this.meta.uid !== this.libraryId) {
+        const keep = { flagAt: this.meta.flagAt, setAt: this.meta.setAt, setSig: this.meta.setSig, folders: this.meta.folders };
+        this.meta = Object.assign(this.freshMeta(), keep, { uid: this.libraryId });
+        this.saveMeta();
+      }
+    }).then(() => this.syncNow(), e => this.fail(e));
   },
   linkFailed(desc) {
     const m = /expired|invalid/i.test(desc) ? 'That sign-in link has expired or was already used. Some email apps open links to check them, which uses them up. Send a new email and open the link once.'
@@ -4082,7 +4105,7 @@ const Cloud = {
   },
   async disconnect() {
     clearTimeout(this.timer);
-    const sb = this.sb; this.sb = null; this.user = null; this.setState('off');
+    const sb = this.sb; this.sb = null; this.user = null; this.libraryId = null; this.setState('off');
     if (sb) { try { await sb.auth.signOut({ scope: 'local' }); } catch (e) {} }
   },
 
@@ -4096,6 +4119,7 @@ const Cloud = {
   say(e) {
     if (this.isNetwork(e)) return 'Supabase could not be reached.';
     const m = String((e && (e.message || e.error_description || e.msg)) || e || 'Unknown error');
+    if (/shared kitchen library is not set up|app_meta/i.test(m)) return 'The shared kitchen library is not set up. Run supabase-schema.sql in the Supabase SQL editor.';
     if (/invalid api key|no api key|apikey/i.test(m)) return 'Supabase did not accept the key. Check it is the anon or publishable key for this project.';
     if (/relation .* does not exist|could not find the table|schema cache/i.test(m)) return 'The tables are not set up in Supabase yet. Run supabase-schema.sql in its SQL editor.';
     if (/row-level security|violates row-level|permission denied/i.test(m)) return 'Supabase refused the write. Sign out and in again, then check the schema was run.';
@@ -4136,6 +4160,7 @@ const Cloud = {
     this.setState('syncing', '');
     const snap = Object.assign({}, this.dirty);
     try {
+      await this.ensureLibraryId();
       await this.push(snap);
       for (const id of ids) if (this.dirty[id] === snap[id]) delete this.dirty[id];
       this.saveQ(); this.saveMeta(); this.tries = 0;
@@ -4172,7 +4197,7 @@ const Cloud = {
     return Object.values(by).map(r => { const out = Object.assign({}, r, { phone: r.ph.join(', '), email: r.em.join(', '), website: r.web.join(', '), updated_at: at }); delete out.ph; delete out.em; delete out.web; return out; });
   },
   async push(snap) {
-    const uid = this.user.id, st = Lib.store, idOf = supplierIdFn(), M = this.meta;
+    const uid = this.libraryUid(), st = Lib.store, idOf = supplierIdFn(), M = this.meta;
     const inv = [], lines = [], trims = [], tpl = [], flags = [], set = [];
     let touchedSup = false;
     for (const [id, d] of Object.entries(snap)) {
@@ -4211,9 +4236,9 @@ const Cloud = {
     }
   },
   async all(table, cols, order) {
-    const out = [];
+    const uid = this.libraryUid(), out = [];
     for (let a = 0; ; a += 1000) {
-      let q = this.sb.from(table).select(cols).eq('user_id', this.user.id);
+      let q = this.sb.from(table).select(cols).eq('user_id', uid);
       for (const o of order) q = q.order(o, { ascending: true });
       const { data, error } = await q.range(a, a + 999);
       if (error) throw error;
@@ -4226,6 +4251,7 @@ const Cloud = {
     if (!this.ready() || !navigator.onLine) return false;
     this.setState('syncing', '');
     try {
+      await this.ensureLibraryId();
       const [rInv, rLines, rTpl, rFlag, rSet] = await Promise.all([
         this.all('invoices', '*', ['key']), this.all('line_items', 'invoice_key,line_no,data', ['invoice_key', 'line_no']),
         this.all('layouts', 'id,data,deleted,updated_at', ['id']), this.all('ignored_items', 'kind,item_key,deleted,updated_at', ['kind', 'item_key']),
@@ -4354,7 +4380,7 @@ function sbBoxHtml() {
       '<div class="row"><input id="sb-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="Code from the email" aria-label="Code from the email"><button class="btn small primary" type="button" data-set="sb-verify">Sign in</button><button class="btn small" type="button" data-set="sb-again">Use another email</button></div>';
   } else if (C.key) {
     acct = '<div class="row"><input id="sb-email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com" value="' + esc(C.email || '') + '" aria-label="Email to sign in with"><button class="btn small primary" type="button" data-set="sb-send">Email me a sign-in link</button></div>' +
-      '<p class="note">Signing in keeps your rows private: Supabase only lets this account read and write them.</p>';
+      '<p class="note">Signing in joins the shared kitchen library: every staff account sees and edits the same invoices and items.</p>';
   }
   const where = !S.standalone ? '<p class="pill warn">Inside Claude this page can’t reach Supabase. Sync works in your own copy of the page: the invoice_scraper.html file on your own site, or opened in Chrome, Edge or Safari.</p>'
     : location.protocol === 'file:' && C.key && !C.user ? '<p class="note">This page is opened from a file, so a sign-in link can’t come back to it. Open the page from its web address to sign in with the link, or type the code from the email.</p>' : '';
