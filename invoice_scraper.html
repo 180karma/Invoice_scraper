@@ -3338,12 +3338,26 @@ function renderLibrary() {
   const off = a.invoices.length ? '' : ' disabled';
   $('#lib-foot').innerHTML = '<div class="row"><button class="btn small" type="button" data-act="lib-items-csv"' + off + '>Items CSV</button><button class="btn small" type="button" data-act="lib-records-csv"' + off + '>Records CSV</button>' +
     '<button class="btn small" type="button" data-act="lib-backup"' + off + '>Back up</button><button class="btn small" type="button" data-act="lib-restore">Restore</button>' +
+    (Cloud.ready() ? '<button class="btn small primary" type="button" data-act="lib-upload"' + (L.uploading ? ' disabled' : '') + ' title="Copy everything stored in this browser (library, layouts, ignored items, settings) to Supabase">' + (L.uploading ? 'Uploading…' : 'Upload to Supabase') + '</button>' : '') +
     (Cloud.limited() ? '' : '<button class="btn small danger" type="button" data-act="lib-clear"' + off + '>' + (L.armed ? 'Tap again to delete everything' : 'Clear library') + '</button>') + '</div>' +
     (a.hidden ? '<p class="note">' + a.hidden + ' item' + pl(a.hidden) + ' hidden.' + (Cloud.limited() ? '' : ' <button class="link" type="button" data-act="lib-unhide">Show ' + (a.hidden === 1 ? 'it' : 'them') + ' again</button>') + '</p>' : '') +
     (a.ignored ? '<p class="note">' + a.ignored + ' item' + pl(a.ignored) + ' ignored on new invoices. <button class="link" type="button" data-act="lib-unignore">Scan ' + (a.ignored === 1 ? 'it' : 'them') + ' again</button></p>' : '') +
     (Cloud.user ? '<p class="note">The library lives in this browser and is copied to the shared kitchen library in Supabase (signed in as ' + esc(Cloud.user.email || 'this account') + '). Everyone on the staff list sees the same invoices and items and can add to them' + (Cloud.limited() ? '; only an admin can change or delete records already here.' : '; admins can also change and delete them.') + '</p>'
       : '<p class="note">The library lives in this browser’s local storage on this device. Another browser or device starts empty, and clearing site data erases it, so take a backup now and then, or turn on the Supabase copy in Settings.</p>');
   syncCopyTableBtn();
+}
+// sends everything in this browser's local storage up, then loads the merged copy back
+async function libUpload() {
+  if (S.lib.uploading) return;
+  if (!Cloud.ready()) { toast('Sign in to Supabase first (Settings, Supabase copy).', 'bad'); return; }
+  flushSync();
+  const n = Object.keys(Lib.store.invoices).length, t = S.templates.length;
+  S.lib.uploading = true; renderLibrary();
+  let ok = false;
+  try { ok = await Cloud.uploadAll(); if (ok) await Cloud.syncNow(); } catch (e) {}
+  S.lib.uploading = false; renderLibrary(); renderSb();
+  if (ok) toast('Uploaded ' + n + ' invoice' + pl(n) + ' and ' + t + ' layout' + pl(t) + ' to Supabase.' + (Cloud.limited() ? ' Invoices someone else already added were left as they are.' : ''));
+  else toast(Cloud.err || 'The upload will continue when Supabase can be reached.', 'bad');
 }
 function libRemoveInvoice(key) {
   Lib.mutate(st => { delete st.invoices[key]; });
@@ -3378,6 +3392,7 @@ function libAct(act) {
     case 'lib-records-csv': giveFile('inventory-records-' + day + '.csv', BOM + Library.recordsCSV(Lib.agg(), S.opts.dateStyle), 'Records CSV'); return true;
     case 'lib-backup': giveFile('inventory-library-' + day + '.json', JSON.stringify(Lib.store, null, 1), 'Backup'); return true;
     case 'lib-restore': { const f = $('#libFile'); if (f) f.click(); return true; }
+    case 'lib-upload': libUpload(); return true;
     case 'lib-clear':
       if (adminOnly()) return true;
       if (!S.lib.armed) { S.lib.armed = true; renderLibrary(); clearTimeout(libAct.t); libAct.t = setTimeout(() => { S.lib.armed = false; if (S.tab === 'library') renderLibrary(); }, 4000); return true; }
