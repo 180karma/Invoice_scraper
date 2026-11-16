@@ -518,6 +518,7 @@ a.contact:hover { background: var(--wash); text-decoration: underline; text-unde
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer onerror="window.__pdfFail=1"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js" defer></script>
+<script src="config.js"></script>
 <script>
 /* ===================================================================
    ENGINE — pure extraction logic, no DOM. Works on positioned text:
@@ -2142,7 +2143,7 @@ async function rescan(doc) {
     const how = scanner();
     if (how === 'gemini') return geminiScan(doc);
     if (how === 'claude') return aiRead(doc);
-    openSettings((doc.pages[0].garbled ? 'The text in this file can’t be read' : 'This page is a picture') + ', so placing its boxes needs Gemini. Add a Gemini API key.'); return;
+    openSettings((doc.pages[0].garbled ? 'The text in this file can’t be read' : 'This page is a picture') + ', so placing its boxes needs Gemini. ' + gemNeed()); return;
   }
   const mine = doc.zones.filter(z => z.src === 'user'), hit = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
   const m = doc.tplId ? null : matchTemplate(doc), tpl = S.templates.find(t => t.id === doc.tplId) || (m && m.tpl);
@@ -2150,7 +2151,7 @@ async function rescan(doc) {
   for (const u of mine) doc.zones = doc.zones.filter(z => !((SINGLE.has(u.type) && z.type === u.type) || (u.type === 'table' && z.type === 'table' && z.page === u.page && hit(z.rect, u.rect))));
   const n = doc.zones.length; doc.zones.push(...mine); doc.touched = mine.length > 0;
   doc.mode = 'text'; doc.aiStale = false; doc.gemPlaced = 0; S.sel = null; S.pending = null; S.touchedOnce = true; run(doc); renderAll();
-  if (!doc.result.rows.length && Gem.key && !Gem.blocked) return geminiScan(doc);              // nothing recognised in the text: let Gemini look
+  if (!doc.result.rows.length && Gem.can() && !Gem.blocked) return geminiScan(doc);              // nothing recognised in the text: let Gemini look
   toast('Page scanned: ' + n + ' box' + (n === 1 ? '' : 'es') + ' placed' + (mine.length ? ', your ' + mine.length + ' kept' : '') + '.');
   afterScan();
 }
@@ -3575,6 +3576,10 @@ const Gem = {
   KEY: 'invoice-scraper.gemini.v1',
   key: '', remember: true, model: 'auto', auto: true, models: null, listedAt: 0,
   blocked: false, noUse: {}, queue: [], running: false,
+  // the gemini-extract Edge Function holds the key in Supabase; null until tried, false when it can't scan
+  server: null, serverWhy: '',
+  viaServer() { return Cloud.ready() && this.server !== false; },
+  can() { return this.viaServer() || !!this.key; },
   load() {
     try {
       const o = JSON.parse(localStorage.getItem(this.KEY) || 'null'); if (!o || typeof o !== 'object') return;
@@ -3608,6 +3613,51 @@ async function gemFetch(path, body, signal) {
   }
   return j;
 }
+async function gemServer(msg, signal) {
+  let tok = '';
+  try { const s = await Cloud.sb.auth.getSession(); tok = s && s.data && s.data.session ? s.data.session.access_token : ''; } catch (e) {}
+  if (!tok) throw { code: 'server_auth', via: 'server' };
+  let r;
+  try {
+    r = await fetch(Cloud.url + '/functions/v1/gemini-extract', { method: 'POST', headers: { apikey: Cloud.key, Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' }, body: JSON.stringify(msg), signal });
+  } catch (e) {
+    if (e && e.name === 'AbortError') throw { code: 'cancelled' };
+    throw S.standalone ? { code: 'server_off', via: 'server', why: 'network' } : { code: 'blocked' };
+  }
+  let j = null; try { j = await r.json(); } catch (e) {}
+  if (r.ok) return j;
+  const er = j && j.error && typeof j.error === 'object' ? j.error : null;
+  // no error object: the function itself did not answer (not deployed, or it crashed)
+  if (!er) throw { code: 'server_off', via: 'server', why: r.status === 404 ? 'missing' : 'broken', status: r.status };
+  if (er.proxy) {
+    if (er.code === 'not_configured') throw { code: 'server_off', via: 'server', why: 'not_configured' };
+    if (er.code === 'unauthorized') throw { code: 'server_auth', via: 'server' };
+    if (er.code === 'not_allowed') throw { code: 'not_allowed', via: 'server' };
+    if (er.code === 'upstream') throw { code: 'network', via: 'server' };
+    throw { code: 'http', via: 'server', status: r.status, gstatus: '', reason: '', message: String(er.message || '').slice(0, 240) };
+  }
+  const det = Array.isArray(er.details) ? er.details : [];
+  throw { code: 'http', via: 'server', status: r.status, gstatus: String(er.status || ''), reason: String((det.find(d => d && d.reason) || {}).reason || ''), message: String(er.message || '').slice(0, 240) };
+}
+// through Supabase when signed in; the key saved in this browser is used only when that route can't scan
+async function gemCall(model, body, signal) {
+  if (Gem.viaServer()) {
+    try { const j = await gemServer(model ? { op: 'generate', model, body } : { op: 'models' }, signal); Gem.server = true; Gem.serverWhy = ''; return j; }
+    catch (e) {
+      if (!e || e.code !== 'server_off') throw e;
+      Gem.server = false; Gem.serverWhy = e.why || '';
+      if (!Gem.key) throw e;
+    }
+  }
+  if (!Gem.key) throw { code: 'no_key' };
+  return gemFetch(model ? 'models/' + encodeURIComponent(model) + ':generateContent' : 'models?pageSize=1000', body, signal);
+}
+const gemVia = () => Gem.viaServer() ? 'server' : 'key';
+function gemNeed() {
+  if (!Cloud.key) return 'Add a Gemini API key.';
+  if (!Cloud.user) return 'Sign in under Supabase copy to scan with the Gemini key kept in Supabase.';
+  return gemErr({ code: 'server_off', via: 'server', why: Gem.serverWhy }) + ' Or add a Gemini API key to this browser.';
+}
 // which models this key may use; "newest" is read from Google's own list, so it keeps up with new releases
 function gemParse(m) {
   const id = String((m && m.name) || '').replace(/^models\//, '');
@@ -3624,7 +3674,7 @@ function gemPick(kind) {
 }
 async function gemList(force) {
   if (Gem.models && !force) return Gem.models;
-  const j = await gemFetch('models?pageSize=1000');
+  const j = await gemCall('', null);
   Gem.models = (j && Array.isArray(j.models) ? j.models : []).map(gemParse).filter(Boolean).sort(gemRank).slice(0, 40);
   Gem.listedAt = Date.now(); Gem.save();
   return Gem.models;
@@ -3652,19 +3702,27 @@ function gemJson(j) {
 }
 function gemErr(e) {
   if (!e) return 'Gemini could not scan this page.';
+  const srv = e.via === 'server', k = srv ? 'The Gemini key in Supabase' : 'This key', kl = srv ? 'the Gemini key in Supabase' : 'this key';
   switch (e.code) {
     case 'cancelled': return '';
+    case 'no_key': return 'Add a Gemini API key in Settings.';
+    case 'server_off':
+      if (e.why === 'not_configured') return 'Scanning through Supabase needs the GEMINI_API_KEY secret. Add it to the GitHub repository secrets and run the Gemini function workflow.';
+      if (e.why === 'network') return 'The Gemini scan function in Supabase could not be reached. It may not be deployed yet.';
+      return 'The Gemini scan function (gemini-extract) is not ' + (e.why === 'missing' ? 'deployed to Supabase yet.' : 'working in Supabase right now.');
+    case 'server_auth': return 'Sign in again under Supabase copy to scan with Gemini.';
+    case 'not_allowed': return 'This account is not on the list allowed to scan with Gemini.';
     case 'blocked': return 'Gemini can’t be reached from inside Claude. Open your own copy of this page to use it.';
-    case 'network': return 'Gemini could not be reached. Check the internet connection and try again.';
+    case 'network': return srv ? 'Supabase could not reach Gemini. Try again in a minute.' : 'Gemini could not be reached. Check the internet connection and try again.';
     case 'declined': return 'Gemini declined to read this page.';
     case 'too_long': return 'Gemini’s answer was cut short. Draw a box around the table and scan again.';
     case 'bad_json': case 'empty': return 'Gemini’s answer could not be turned into rows. Try again.';
     case 'http':
-      if (e.reason === 'API_KEY_INVALID' || /api key not valid|invalid api key/i.test(e.message)) return 'Google says this API key is not valid. Check it in Settings.';
-      if (/REFERRER|referer/i.test(e.reason + ' ' + e.message)) return 'This API key is limited to certain websites, and this page is not one of them. Change the key’s restrictions in Google Cloud.';
-      if (e.status === 429) return 'This key has used up its Gemini quota for now. Try again later, or choose a Flash model in Settings.';
-      if (e.status === 403) return 'This key is not allowed to use Gemini. Check that the Gemini API is enabled for its Google project.';
-      if (e.status === 404) return 'That Gemini model is not available to this key. Choose another in Settings.';
+      if (e.reason === 'API_KEY_INVALID' || /api key not valid|invalid api key/i.test(e.message)) return srv ? 'Google says the Gemini key in Supabase is not valid. Replace the GEMINI_API_KEY secret.' : 'Google says this API key is not valid. Check it in Settings.';
+      if (/REFERRER|referer/i.test(e.reason + ' ' + e.message)) return srv ? 'The Gemini key in Supabase is limited to certain websites. A key used from a server needs no website restriction.' : 'This API key is limited to certain websites, and this page is not one of them. Change the key’s restrictions in Google Cloud.';
+      if (e.status === 429) return k + ' has used up its Gemini quota for now. Try again later, or choose a Flash model in Settings.';
+      if (e.status === 403) return k + ' is not allowed to use Gemini. Check that the Gemini API is enabled for its Google project.';
+      if (e.status === 404) return 'That Gemini model is not available to ' + kl + '. Choose another in Settings.';
       if (e.status >= 500) return 'Gemini is busy or having trouble. Try again in a minute.';
       return 'Gemini refused the request' + (e.message ? ': ' + hideKey(e.message) : '.');
   }
@@ -3721,10 +3779,10 @@ function unreadable(doc) {
   if (doc.result && !doc.result.rows.length && doc.mode !== 'ai') return 'no-items';
   return '';
 }
-function scanner() { return Gem.key && !Gem.blocked ? 'gemini' : S.caps.sample ? 'claude' : Gem.key ? 'gemini' : null; }
+function scanner() { return Gem.can() && !Gem.blocked ? 'gemini' : S.caps.sample ? 'claude' : Gem.can() ? 'gemini' : null; }
 async function geminiScan(doc) {
   if (!doc || doc.aiBusy) return;
-  if (!Gem.key) { doc.gemPending = false; openSettings('Add a Gemini API key to scan pictures and pages that can’t be read.'); return; }
+  if (!Gem.can()) { doc.gemPending = false; openSettings('Scanning pictures and pages that can’t be read needs Gemini. ' + gemNeed()); return; }
   doc.aiBusy = 'gemini'; doc.aiError = ''; doc.aiErrSet = false; doc.gemPending = false; doc.gemModel = ''; renderStatus(); renderTab();
   const ctl = S.aiCtl = new AbortController(), timer = setTimeout(() => ctl.abort(), 240000);
   let turned = false;
@@ -3740,7 +3798,7 @@ async function geminiScan(doc) {
     let out = null, used = '', last = null;
     for (const model of gemChain()) {
       doc.gemModel = model; renderStatus();
-      try { out = gemJson(await gemFetch('models/' + encodeURIComponent(model) + ':generateContent', body, ctl.signal)); used = model; break; }
+      try { out = gemJson(await gemCall(model, body, ctl.signal)); used = model; break; }
       catch (e) {
         last = e;
         // "newest" may be a model this key cannot use yet (Argon is paid-tier only): step down to the newest Flash
@@ -3788,7 +3846,7 @@ async function geminiScan(doc) {
     if (e && e.code === 'blocked') Gem.blocked = true;
     if (!turned) {
       doc.aiError = gemErr(e);
-      doc.aiErrSet = !!e && (e.code === 'blocked' || (e.code === 'http' && [400, 401, 403, 404, 429].includes(e.status)));
+      doc.aiErrSet = !!e && (['blocked', 'server_off', 'server_auth', 'not_allowed', 'no_key'].includes(e.code) || (e.code === 'http' && [400, 401, 403, 404, 429].includes(e.status)));
     }
   }
   clearTimeout(timer); if (S.aiCtl === ctl) S.aiCtl = null;
@@ -3803,7 +3861,7 @@ async function pumpGemini() {
   Gem.running = false;
 }
 function queueGemini(doc) {
-  if (!Gem.key || !Gem.auto || Gem.blocked || !unreadable(doc)) return false;
+  if (!Gem.can() || !Gem.auto || Gem.blocked || !unreadable(doc)) return false;
   doc.gemPending = true; Gem.queue.push(doc); return true;
 }
 
@@ -3895,13 +3953,29 @@ function sbKeyProblem(k) {
     return j && j.role === 'service_role' ? 'secret' : j && j.role === 'anon' ? '' : 'bad';
   } catch (e) { return 'bad'; }
 }
+// config.js is written at deploy (and locally) from the environment; a key typed in Settings overrides it
+const SB_ENV = (() => {
+  const c = window.INVOICE_SCRAPER_CONFIG && typeof window.INVOICE_SCRAPER_CONFIG === 'object' ? window.INVOICE_SCRAPER_CONFIG : {};
+  const url = typeof c.supabaseUrl === 'string' ? c.supabaseUrl.trim().replace(/\/+$/, '') : '';
+  const key = typeof c.supabaseAnonKey === 'string' ? c.supabaseAnonKey.trim() : '';
+  return { url: /^https?:\/\/[\w.\-]+(:\d+)?$/.test(url) ? url : '', key: key && !sbKeyProblem(key) ? key.slice(0, 400) : '' };
+})();
+const SB_HOME = SB_ENV.url || SB_URL;
 const Cloud = {
   KEY: 'invoice-scraper.supabase.v1', QKEY: 'invoice-scraper.supabase.queue.v1', MKEY: 'invoice-scraper.supabase.meta.v1',
-  url: SB_URL, key: '', sb: null, user: null, state: 'off', err: '', loaded: false, applying: false,
+  url: SB_HOME, key: '', ownUrl: '', ownKey: '', keyFrom: '', sb: null, user: null, state: 'off', err: '', loaded: false, applying: false,
   sentTo: '', email: '', keyEdit: false, msg: '', dirty: {}, meta: null, tplSnap: {}, timer: 0, tries: 0, chain: Promise.resolve(), connecting: null,
   freshMeta() { return { uid: '', flagAt: {}, setAt: '', setSig: '', folders: {}, lc: {}, sup: {}, uploadedAt: '', pulledAt: '' }; },
   load() {
-    try { const o = JSON.parse(localStorage.getItem(this.KEY) || 'null'); if (o && typeof o === 'object') { if (typeof o.url === 'string' && o.url) this.url = o.url; if (typeof o.key === 'string') this.key = o.key.trim().slice(0, 400); } } catch (e) {}
+    try {
+      const o = JSON.parse(localStorage.getItem(this.KEY) || 'null');
+      if (o && typeof o === 'object') {
+        // older copies always stored the built-in URL; only a URL someone changed counts as their own
+        if (typeof o.url === 'string' && o.url && (o.urlSet || o.url !== SB_URL)) this.ownUrl = o.url;
+        if (typeof o.key === 'string') this.ownKey = o.key.trim().slice(0, 400);
+      }
+    } catch (e) {}
+    this.pick();
     try { const q = JSON.parse(localStorage.getItem(this.QKEY) || 'null'); if (q && typeof q === 'object') this.dirty = q; } catch (e) {}
     this.meta = this.freshMeta();
     try { const m = JSON.parse(localStorage.getItem(this.MKEY) || 'null'); if (m && typeof m === 'object') Object.assign(this.meta, m); } catch (e) {}
@@ -3909,7 +3983,14 @@ const Cloud = {
     if (!this.meta.setSig) this.meta.setSig = JSON.stringify(this.settingsData());
     this.loaded = true;
   },
-  save() { try { localStorage.setItem(this.KEY, JSON.stringify({ url: this.url, key: this.key })); } catch (e) {} },
+  // the site's key belongs to the site's project, so it is not used with a project URL typed in Settings
+  pick() {
+    this.url = this.ownUrl || SB_HOME;
+    const envKey = this.url === SB_HOME ? SB_ENV.key : '';
+    this.key = this.ownKey || envKey; this.keyFrom = this.ownKey ? 'own' : envKey ? 'env' : '';
+  },
+  siteKey() { return this.url === SB_HOME && !!SB_ENV.key; },
+  save() { try { localStorage.setItem(this.KEY, JSON.stringify({ url: this.ownUrl, urlSet: !!this.ownUrl, key: this.ownKey })); } catch (e) {} },
   saveQ() { try { localStorage.setItem(this.QKEY, JSON.stringify(this.dirty)); } catch (e) {} },
   saveMeta() { try { localStorage.setItem(this.MKEY, JSON.stringify(this.meta)); } catch (e) {} },
   ready() { return !!(this.sb && this.user); },
@@ -3988,7 +4069,7 @@ const Cloud = {
   authed(session) {
     const u = session && session.user ? { id: session.user.id, email: session.user.email || '' } : null;
     if ((u && u.id) === (this.user && this.user.id)) return;
-    this.user = u;
+    this.user = u; Gem.server = null; Gem.serverWhy = '';
     if (!u) { this.setState('off'); renderSb(); return; }
     if (this.meta.uid !== u.id) { const keep = { flagAt: this.meta.flagAt, setAt: this.meta.setAt, setSig: this.meta.setSig, folders: this.meta.folders }; this.meta = Object.assign(this.freshMeta(), keep, { uid: u.id }); this.saveMeta(); }
     this.sentTo = ''; renderSb(/^(Key saved|To finish signing in)/.test(this.msg) ? '' : null);
@@ -4256,7 +4337,9 @@ function sbBoxHtml() {
   const C = Cloud, msg = C.msg ? '<p class="note" id="sb-msg" aria-live="polite">' + esc(hideKey(C.msg)) + '</p>' : '';
   const urlRow = '<div class="field"><label for="sb-url">Project URL</label><input id="sb-url" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" value="' + esc(C.url) + '"></div>';
   const keyBox = C.key && !C.keyEdit
-    ? '<div class="keysaved"><span class="pill good">Key saved</span><button class="btn small" type="button" data-set="sb-replace">Replace</button><button class="btn small" type="button" data-set="sb-forget">Forget</button></div>'
+    ? (C.keyFrom === 'env'
+      ? '<div class="keysaved"><span class="pill good">Key set by this site</span><button class="btn small" type="button" data-set="sb-replace">Use another key</button></div>'
+      : '<div class="keysaved"><span class="pill good">' + (C.siteKey() ? 'Your own key saved' : 'Key saved') + '</span><button class="btn small" type="button" data-set="sb-replace">Replace</button><button class="btn small" type="button" data-set="sb-forget">' + (C.siteKey() ? 'Use the site’s key' : 'Forget') + '</button></div>')
     : '<div class="row"><input id="sb-key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="' + (C.key ? 'Paste the new key' : 'Paste the anon or publishable key') + '" aria-describedby="sb-keynote"><button class="btn small primary" type="button" data-set="sb-savekey" disabled>Save key</button>' +
       (C.key ? '<button class="btn small" type="button" data-set="sb-cancelkey">Cancel</button>' : '') + '</div>';
   let acct = '';
@@ -4276,18 +4359,20 @@ function sbBoxHtml() {
   const where = !S.standalone ? '<p class="pill warn">Inside Claude this page can’t reach Supabase. Sync works in your own copy of the page: the invoice_scraper.html file on your own site, or opened in Chrome, Edge or Safari.</p>'
     : location.protocol === 'file:' && C.key && !C.user ? '<p class="note">This page is opened from a file, so a sign-in link can’t come back to it. Open the page from its web address to sign in with the link, or type the code from the email.</p>' : '';
   return where + urlRow + '<div class="field"><label for="sb-key">Anon or publishable key</label>' + keyBox +
-    '<p class="note" id="sb-keynote">In Supabase: Project Settings, API Keys. Use the <b>anon</b> or <b>publishable</b> key, never the service_role or secret key. Once saved it is never shown again.</p></div>' + acct + msg;
+    '<p class="note" id="sb-keynote">' + (C.keyFrom === 'env' && !C.keyEdit ? 'This site was published with its Supabase key, so there is nothing to paste. ' : '') + 'In Supabase: Project Settings, API Keys. Use the <b>anon</b> or <b>publishable</b> key, never the service_role or secret key. Once saved it is never shown again.</p></div>' + acct + msg;
 }
 function renderSb(msg) {
   if (msg != null) Cloud.msg = msg;
   const box = $('#sb-box'); if (box) box.innerHTML = sbBoxHtml();
+  const gv = $('#g-via'); if (gv) gv.innerHTML = gemViaHtml();
+  const ck = $('#settings [data-set="check"]'); if (ck) ck.disabled = !Gem.can() && !Cloud.ready();
   renderSyncPill();
 }
 function sbSetKey(v) {
   const p = sbKeyProblem(v);
   if (p === 'secret') { renderSb('That is a secret (service_role) key. It must never be put in a web page. Paste the anon or publishable key instead.'); return false; }
   if (p) { renderSb('That does not look like a Supabase anon or publishable key.'); return false; }
-  Cloud.key = v; Cloud.keyEdit = false; Cloud.save();
+  Cloud.ownKey = v; Cloud.keyEdit = false; Cloud.pick(); Cloud.save();
   Cloud.disconnect().then(() => Cloud.connect()).then(() => renderSb());
   return true;
 }
@@ -4296,7 +4381,12 @@ async function sbAct(act) {
   if (act === 'sb-replace') { C.keyEdit = true; renderSb(''); const k = $('#sb-key'); if (k) k.focus(); return; }
   if (act === 'sb-cancelkey') { C.keyEdit = false; renderSb(''); return; }
   if (act === 'sb-savekey') { const k = $('#sb-key'), v = k ? k.value.trim() : ''; if (k) k.value = ''; if (v && sbSetKey(v)) renderSb('Key saved. Now sign in with your email.'); return; }
-  if (act === 'sb-forget') { await C.disconnect(); C.key = ''; C.keyEdit = false; C.sentTo = ''; C.save(); renderSb('Key removed. The data in this browser is kept.'); return; }
+  if (act === 'sb-forget') {
+    await C.disconnect(); C.ownKey = ''; C.keyEdit = false; C.sentTo = ''; C.pick(); C.save();
+    if (C.key) { renderSb('Your key was removed. Using the key this site was published with; sign in again.'); await C.connect(); renderSb(); }
+    else renderSb('Key removed. The data in this browser is kept.');
+    return;
+  }
   if (act === 'sb-send') {
     const e = $('#sb-email'), email = e ? e.value.trim() : ''; C.email = email;
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { renderSb('Type the email address to sign in with.'); return; }
@@ -4326,14 +4416,14 @@ async function sbAct(act) {
     renderSb(ok ? 'Uploaded ' + n + ' invoice' + pl(n) + ' and ' + S.templates.length + ' layout' + pl(S.templates.length) + '.' : (C.err || 'The upload will continue when Supabase can be reached.'));
   }
 }
-window.addEventListener('online', () => { if (Cloud.ready()) Cloud.syncNow(); else if (Cloud.key && !Cloud.sb) Cloud.connect(); });
+window.addEventListener('online', () => { if (Gem.server === false && Gem.serverWhy === 'network') Gem.server = null; if (Cloud.ready()) Cloud.syncNow(); else if (Cloud.key && !Cloud.sb) Cloud.connect(); });
 window.addEventListener('offline', () => { if (Cloud.user) Cloud.setState('offline', ''); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && Cloud.ready() && Date.now() - sbTime(Cloud.meta.pulledAt) > 300000) Cloud.syncNow(); });
 
 /* settings */
 function openSettings(note) {
   S.setNote = note || ''; renderSettings(''); $('#settings').hidden = false;
-  setTimeout(() => { const k = $(Gem.key ? '#g-model' : '#g-key'); if (k) k.focus(); }, 30);
+  setTimeout(() => { const k = $(Gem.can() ? '#g-model' : Cloud.key && !Cloud.user ? '#sb-email' : '#g-key'); if (k) k.focus(); }, 30);
   if (Files.dir) { const was = Files.perm; Files.ready(false).then(() => { if (Files.perm !== was && !$('#settings').hidden) renderSettings(''); }); }
 }
 function closeSettings() {
@@ -4373,14 +4463,23 @@ function renderSettings(msg) {
     '<h3 class="sec">Scanning with Gemini</h3>' +
     '<p class="note">When a page is a picture, or its text can’t be read, Gemini looks at it, places the boxes and reads the line items. On pages with readable text the values still come from the text, so they stay exact.</p>' +
     (S.standalone ? '' : '<p class="pill warn">Inside Claude this page can only reach Claude, so Gemini works in your own copy of the page: the invoice_scraper.html file opened in Chrome, Edge or Safari, or put on your own site.</p>') +
-    '<div class="field"><label for="g-key">Gemini API key</label>' + keyBox +
-    '<p class="note" id="g-keynote">Make one at aistudio.google.com/apikey (<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">open it</a>). Once saved, the key is never shown again, not even here. It goes only to Google, with the page images, and scans are billed to that key’s Google account.</p></div>' +
+    '<div id="g-via">' + gemViaHtml() + '</div>' +
+    '<div class="field"><label for="g-key">Gemini API key in this browser (fallback)</label>' + keyBox +
+    '<p class="note" id="g-keynote">Only needed when scanning through Supabase isn’t set up. Make one at aistudio.google.com/apikey (<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">open it</a>). Once saved, the key is never shown again, not even here. It goes only to Google, with the page images, and scans are billed to that key’s Google account.</p></div>' +
     '<label class="chk" for="g-remember"><input type="checkbox" id="g-remember"' + (Gem.remember ? ' checked' : '') + '>Remember the key in this browser</label>' +
     '<div class="field"><label for="g-model">Model</label><select id="g-model">' + opts.map(o => '<option value="' + esc(o[0]) + '"' + (o[0] === Gem.model ? ' selected' : '') + '>' + esc(o[1]) + '</option>').join('') + '</select>' +
     '<p class="note">Newest model picks the latest Gemini your key can use, from Google’s own list. If the key can’t use it (the newest Pro-class model may need a paid key), the scan steps down to the newest Flash.</p></div>' +
     '<label class="chk" for="g-auto"><input type="checkbox" id="g-auto"' + (Gem.auto ? ' checked' : '') + '>Scan automatically when an opened page is a picture or can’t be read</label>' +
-    '<div class="row"><button class="btn primary" type="button" data-set="check"' + (Gem.key ? '' : ' disabled') + '>Check key</button><button class="btn" type="button" data-set="close">Done</button></div>' +
+    '<div class="row"><button class="btn primary" type="button" data-set="check"' + (Gem.can() || Cloud.ready() ? '' : ' disabled') + '>Check Gemini</button><button class="btn" type="button" data-set="close">Done</button></div>' +
     '<p class="note" id="g-msg" aria-live="polite">' + hideKey(msg) + '</p></div>';
+}
+// the key behind the Supabase route stays in Supabase secrets; this only says which route scans use
+function gemViaHtml() {
+  if (!Cloud.key) return '';
+  if (!Cloud.user) return '<p class="note">Sign in under Supabase copy above to scan with the Gemini key kept in your Supabase project. It never comes to this page.</p>';
+  if (Gem.server === false) return '<p class="pill warn">' + esc(gemErr({ code: 'server_off', via: 'server', why: Gem.serverWhy })) + (Gem.key ? ' Using the key saved in this browser for now.' : '') + '</p>';
+  return '<p class="pill good">' + (Gem.server ? 'Scans go through your Supabase project' : 'Scans will go through your Supabase project') + '</p>' +
+    '<p class="note">The Gemini key is kept in Supabase and never comes to this page.' + (Gem.key ? ' A key is also saved in this browser; it is used only if Supabase can’t scan. You can Forget it below.' : '') + '</p>';
 }
 function gemModelsLine() {
   const a = gemPick('any'), f = gemPick('flash');
@@ -4401,8 +4500,9 @@ $('#settings').addEventListener('click', async e => {
   if (act === 'folder-forget') { await Files.forget(); renderSettings('Invoices will no longer be saved into a folder.'); renderAll(); return; }
   if (act === 'check') {
     if (key && key.value.trim()) { Gem.setKey(key.value.trim()); key.value = ''; S.keyEdit = false; }
-    if (!Gem.key) return;
-    renderSettings('Asking Google which models this key can use…'); const btn = $('#settings [data-set="check"]'); if (btn) btn.disabled = true;
+    if (Gem.server === false) Gem.server = null;
+    if (!Gem.can()) return;
+    renderSettings(gemVia() === 'server' ? 'Asking Google, through Supabase, which models the project’s key can use…' : 'Asking Google which models this key can use…'); const btn = $('#settings [data-set="check"]'); if (btn) btn.disabled = true;
     try { await gemList(true); Gem.noUse = {}; renderSettings(gemModelsLine()); }
     catch (err) { if (err && err.code === 'blocked') Gem.blocked = true; renderSettings(esc(gemErr(err))); }
     renderStatus();
@@ -4414,7 +4514,7 @@ $('#settings').addEventListener('change', e => {
   if (t.id === 'sb-url') {
     const v = t.value.trim().replace(/\/+$/, '');
     if (!/^https:\/\/[\w.\-]+(:\d+)?$/.test(v)) { t.value = Cloud.url; renderSb('The project URL looks like https://your-project.supabase.co'); return; }
-    if (v !== Cloud.url) { Cloud.url = v; Cloud.save(); Cloud.disconnect().then(() => Cloud.key && Cloud.connect()).then(() => renderSb()); renderSb('Project URL saved. Sign in again for this project.'); }
+    if (v !== Cloud.url) { Cloud.ownUrl = v === SB_HOME ? '' : v; Cloud.pick(); Cloud.save(); Cloud.disconnect().then(() => Cloud.key && Cloud.connect()).then(() => renderSb()); renderSb('Project URL saved. Sign in again for this project.'); }
     return;
   }
   if (t.id === 'g-remember') { Gem.remember = t.checked; Gem.save(); }
