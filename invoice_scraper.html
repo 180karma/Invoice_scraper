@@ -2526,6 +2526,57 @@ function logoThumb(doc) {
   if (url) doc._lt = { key, url };
   return url;
 }
+// Supplier logos are files in the private Storage bucket `supplier-logos`.
+// Object path: `{supplier id}.jpg`. The id is the ABN (digits) when the supplier has one,
+// otherwise the normalised name with spaces and slashes turned into single hyphens.
+// A signed-in staff session reads it (createSignedUrl). The bucket does not need to be public.
+const LOGO_BUCKET = 'supplier-logos';
+const Logos = {
+  cache: {}, inflight: {},
+  path(id) {
+    let s = String(id || '').trim().toLowerCase();
+    if (!s || s === 'unknown') return '';
+    s = s.replace(/[\s/]+/g, '-').replace(/[^a-z0-9._-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 120);
+    return s ? s + '.jpg' : '';
+  },
+  src(id) {
+    const path = this.path(id);
+    if (!path) return '';
+    if (Object.prototype.hasOwnProperty.call(this.cache, path)) return this.cache[path];
+    if (Cloud.ready() && Cloud.sb && Cloud.sb.storage && !this.inflight[path]) this.inflight[path] = this.fetch(path);
+    return '';
+  },
+  async fetch(path) {
+    let url = '';
+    try {
+      const { data, error } = await Cloud.sb.storage.from(LOGO_BUCKET).createSignedUrl(path, 3600);
+      if (!error && data && data.signedUrl) url = data.signedUrl;
+    } catch (e) {}
+    this.cache[path] = url;
+    delete this.inflight[path];
+    if (url) { renderStatus(); if (!$('#settings').hidden) return; renderTab(); if (S.sup) renderSupplier(); }
+  },
+  async put(id, dataUrl) {
+    const path = this.path(id);
+    if (!path || !dataUrl || !Cloud.ready() || !Cloud.sb || !Cloud.sb.storage) return;
+    try {
+      const blob = await (await fetch(dataUrl)).blob();
+      const { error } = await Cloud.sb.storage.from(LOGO_BUCKET).upload(path, blob, { contentType: 'image/jpeg', upsert: true });
+      if (error) return;
+      delete this.cache[path];
+      this.fetch(path);
+    } catch (e) {}
+  },
+};
+function logoSrc(supplierId, fallback) {
+  const stored = Logos.src(supplierId);
+  return { url: stored || fallback || '', fromStorage: !!stored };
+}
+function logoTag(supplierId, fallback, alt, style) {
+  const logo = logoSrc(supplierId, fallback);
+  if (!logo.url) return '';
+  return '<img src="' + esc(logo.url) + '" alt="' + esc(alt || 'Supplier logo') + '"' + (style ? ' style="' + style + '"' : '') + (logo.fromStorage ? ' data-logo="storage"' : '') + '>';
+}
 // Which saved invoices belong to one supplier: ABN when we have it, otherwise the normalised name.
 function supplierIdFn() {
   const invs = Object.values((Lib.store && Lib.store.invoices) || {});
@@ -2609,7 +2660,9 @@ function renderSupplier() {
       '<p class="note">' + (mine.length ? 'No invoice is marked paid, so this is the amount owing.' : 'Nothing from this supplier is saved in the library yet.') + '</p></div>';
   }
   const miss = mine.length - nTot;
-  let h = '<div class="card"><div class="suphead"><h2 id="supTitle">' + esc(name) + '</h2><button class="btn" type="button" data-sup-close>Close</button></div><div class="supbody">' + owingHtml +
+  const thumb = ((tpls.find(t => t.logo && t.logo.thumb) || {}).logo || {}).thumb || '';
+  const mark = logoTag(id, thumb, name, 'height:36px;width:auto;max-width:96px');
+  let h = '<div class="card"><div class="suphead">' + mark + '<h2 id="supTitle">' + esc(name) + '</h2><button class="btn" type="button" data-sup-close>Close</button></div><div class="supbody">' + owingHtml +
     '<div class="supfacts"><div><span>Invoices</span><b>' + mine.length + '</b></div><div><span>Latest invoice</span><b>' + (latest ? esc(niceDate(supplierWhen(latest))) : '—') + '</b></div><div><span>Latest number</span><b>' + (latest && latest.invoice_no ? esc(latest.invoice_no) : '—') + '</b></div></div>' +
     (abn ? '<p class="note">ABN ' + esc(fmtAbn(abn)) + '</p>' : '') +
     (cl.length ? '<div class="contacts big" aria-label="Supplier contact details">' + cl.join('') + '</div>' : '<p class="note">No phone, email or website is stored for this supplier.</p>') +
@@ -2662,7 +2715,7 @@ function openSavedInvoice(key) {
 function renderStatus() {
   const doc = cur(), el = $('#status');
   if (!doc) { el.innerHTML = '<div class="who"><div class="whoText"><div class="sup">No invoice open</div><div class="meta">Open a PDF or a photo of an invoice to start.</div></div></div>'; return; }
-  const r = doc.result, f = r.fields, lt = logoThumb(doc);
+  const r = doc.result, f = r.fields;
   const bits = [esc(r.docType) + (f.invoice_no ? ' ' + esc(f.invoice_no.value) : '')];
   if (f.date) bits.push(esc(niceDate(f.date.value)));
   if (f.abn) bits.push('ABN ' + esc(fmtAbn(f.abn.value)));
@@ -2709,8 +2762,10 @@ function renderStatus() {
   const cl = contactLinks(fieldContacts(f));
   const supIdOf = supplierIdFn();
   const supName = f.supplier && f.supplier.value != null ? String(f.supplier.value).trim() : '';
-  const supHtml = supName ? supNameBtn(supName, supIdOf(supName, f.abn && f.abn.value), 'supbtn') : '<span class="unk">Supplier not found yet</span>';
-  el.innerHTML = '<div class="who">' + (lt ? '<img src="' + lt + '" alt="Supplier logo">' : '') + '<div class="whoText"><div class="sup">' + supHtml + '</div><div class="meta">' + bits.join(' · ') + '</div>' +
+  const supId = supName ? supIdOf(supName, f.abn && f.abn.value) : '';
+  const supHtml = supName ? supNameBtn(supName, supId, 'supbtn') : '<span class="unk">Supplier not found yet</span>';
+  const lt = logoTag(supId, logoThumb(doc), 'Supplier logo');
+  el.innerHTML = '<div class="who">' + lt + '<div class="whoText"><div class="sup">' + supHtml + '</div><div class="meta">' + bits.join(' · ') + '</div>' +
     (cl.length ? '<div class="contacts" aria-label="Supplier contact details">' + cl.join('') + '</div>' : '') + '</div></div><div class="pills">' + ps.join('') + '</div>';
 }
 function renderItems() {
@@ -2760,8 +2815,9 @@ function renderDetails() {
   h += '<h3 class="sec">Supplier contact</h3><div class="fields">' + fld('phone', 'Phone') + fld('email', 'Email') + fld('website', 'Website') + '</div>' +
     (cl.length ? '<div class="contacts big">' + cl.join('') + '</div><p class="note">Tap a number to call it or an address to write an email. Separate several with commas.</p>' : '<p class="note">No phone number or email found. Type them above, separated by commas, and they are kept with the supplier.</p>');
   if (r.totals.length) h += '<h3 class="sec">Printed under the table</h3><div class="sumlines">' + r.totals.map(t => '<div><span>' + esc(t.label) + '</span><span>' + money(t.value) + '</span></div>').join('') + '</div>';
-  const lt = logoThumb(doc);
-  h += '<h3 class="sec">Logo</h3>' + (lt ? '<div class="tpl"><img src="' + lt + '" alt="Supplier logo" style="width:auto;max-width:200px;height:56px"><div class="t"><span>Cropped from the Logo box. It is saved with the supplier layout and used to recognise their next invoice, including scans.</span></div></div>' : '<p class="note">No logo marked. Draw a box around the logo and choose Logo to use it for recognising this supplier.</p>');
+  const lt = logoTag(supplierIdFn()(f.supplier && f.supplier.value, f.abn && f.abn.value), logoThumb(doc), 'Supplier logo', 'width:auto;max-width:200px;height:56px');
+  const stored = lt.indexOf('data-logo="storage"') >= 0;
+  h += '<h3 class="sec">Logo</h3>' + (lt ? '<div class="tpl">' + lt + '<div class="t"><span>' + (stored ? 'The supplier’s logo, loaded from Supabase Storage.' : 'Cropped from the Logo box. Saving the layout stores it with the supplier, and the next invoice is recognised from it.') + '</span></div></div>' : '<p class="note">No logo marked. Draw a box around the logo and choose Logo to use it for recognising this supplier.</p>');
   h += '<p class="note">Values typed here override what was read and go into the CSV.</p>';
   h += '<h3 class="sec">Invoice file</h3>' + fileSection(doc);
   el.innerHTML = h;
@@ -2816,8 +2872,10 @@ function renderSuppliers() {
   if (!S.templates.length) h += '<p class="empty">No supplier layouts saved yet.</p>';
   for (const t of S.templates) {
     const on = doc && doc.tplId === t.id;
-    h += '<div class="tpl' + (on ? ' on' : '') + '">' + (t.logo && t.logo.thumb ? '<img src="' + esc(t.logo.thumb) + '" alt="">' : '<span class="noimg">NO LOGO</span>') +
-      '<div class="t">' + supNameBtn(t.name, supplierIdFn()(t.name, t.abn), 'tplname') + '<span>' + (t.abn ? 'ABN ' + esc(fmtAbn(t.abn)) + ' · ' : '') + t.zones.length + ' box' + (t.zones.length === 1 ? '' : 'es') + (t.auto ? ' · saved automatically' : '') + (on ? ' · in use' : '') + '</span>' +
+    const sid = supplierIdFn()(t.name, t.abn);
+    const mark = logoTag(sid, t.logo && t.logo.thumb, '');
+    h += '<div class="tpl' + (on ? ' on' : '') + '">' + (mark || '<span class="noimg">NO LOGO</span>') +
+      '<div class="t">' + supNameBtn(t.name, sid, 'tplname') + '<span>' + (t.abn ? 'ABN ' + esc(fmtAbn(t.abn)) + ' · ' : '') + t.zones.length + ' box' + (t.zones.length === 1 ? '' : 'es') + (t.auto ? ' · saved automatically' : '') + (on ? ' · in use' : '') + '</span>' +
       (contactLinks(t, true).length ? '<div class="contacts">' + contactLinks(t, true).join('') + '</div>' : '') + '</div>' +
       (doc && !on ? '<button class="btn small" type="button" data-apply="' + esc(t.id) + '">Apply</button>' : '') +
       (Cloud.limited() ? '' : '<button class="iconbtn" type="button" data-del="' + esc(t.id) + '" aria-label="Delete the layout for ' + esc(t.name) + '">' + IC.bin.replace('<svg', '<svg width="18" height="18"') + '</button>') + '</div>';
@@ -3459,6 +3517,7 @@ async function saveTemplateFor(doc, how) {
   const t = cleanTpl({ id, name, abn, headerSig: doc.fp ? doc.fp.headerSig : '', zones, logo, phone: c.phone || (old && old.phone) || '', email: c.email || (old && old.email) || '', website: c.website || (old && old.website) || '',
     auto: how === 'auto' && (!old || old.auto), updated: new Date().toISOString() });
   const r = await Store.save(t);
+  if (logo && logo.thumb) Logos.put(supplierIdFn()(name, abn), logo.thumb);
   doc.tplId = id; doc.touched = false; doc.userEdit = false;
   doc.tplWhy = how === 'auto' ? [old ? 'auto-updated' : 'auto-saved'] : ['saved'];
   if (!old) recheckDocs();
@@ -3594,49 +3653,16 @@ async function aiRead(doc) {
 }
 
 /* ================= Gemini: scans pictures and unreadable pages, places the boxes, reads the lines ================= */
-const GEM_API = 'https://generativelanguage.googleapis.com/v1beta/';
-const GEM_MODEL = 'gemini-3.5-flash';
+// Gemini 3.8 Flash. Official model id from Google's Gemini API (stable, September 2026).
+const GEM_MODEL = 'gemini-3.8-flash';
 const Gem = {
-  KEY: 'invoice-scraper.gemini.v1',
-  key: '', remember: true, model: GEM_MODEL, auto: true, models: null, listedAt: 0,
-  blocked: false, noUse: {}, queue: [], running: false,
-  // the gemini-extract Edge Function holds the key in Supabase; null until tried, false when it can't scan
-  server: null, serverWhy: '',
-  viaServer() { return !!(Cloud.ready() && Cloud.user && Cloud.role && this.server !== false); },
-  can() { return this.viaServer() || !!this.key; },
-  load() {
-    try {
-      const o = JSON.parse(localStorage.getItem(this.KEY) || 'null'); if (!o || typeof o !== 'object') return;
-      this.key = typeof o.key === 'string' ? o.key.trim().slice(0, 200) : '';
-      this.remember = o.remember !== false; this.auto = o.auto !== false;
-      this.model = GEM_MODEL;
-      if (Array.isArray(o.models) && +o.listedAt > Date.now() - 86400000) { this.models = o.models.filter(m => m && typeof m.id === 'string' && /^gemini-[\w.\-]+$/.test(m.id)).map(m => ({ id: m.id, name: String(m.name || m.id).slice(0, 60), v: +m.v || 0, preview: !!m.preview, tier: +m.tier || 2 })); this.listedAt = +o.listedAt; }
-    } catch (e) {}
-  },
-  save() {
-    Cloud.settingsChanged();
-    try { localStorage.setItem(this.KEY, JSON.stringify({ key: this.remember ? this.key : '', remember: this.remember, model: this.model, auto: this.auto, models: this.models, listedAt: this.listedAt })); return true; }
-    catch (e) { return false; }
-  },
-  setKey(k) { k = String(k || '').trim(); if (k === this.key) return; this.key = k; this.models = null; this.listedAt = 0; this.noUse = {}; this.blocked = false; this.save(); },
-  nameOf(id) { const m = (this.models || []).find(x => x.id === id); return m ? m.name : String(id || 'Gemini').replace(/^gemini-/i, 'Gemini ').replace(/-/g, ' '); },
+  auto: true,   // a picture or unreadable page is scanned on its own; there is no control for this
+  blocked: false, queue: [], running: false, serverWhy: '',
+  // the key stays in the Supabase secret GEMINI_API_KEY; this page never holds one
+  can() { return !!(Cloud.ready() && Cloud.user && Cloud.role); },
+  load() { try { localStorage.removeItem('invoice-scraper.gemini.v1'); } catch (e) {} },
+  nameOf() { return 'Gemini 3.8 Flash'; },
 };
-async function gemFetch(path, body, signal) {
-  let r;
-  try {
-    r = await fetch(GEM_API + path, { method: body ? 'POST' : 'GET', headers: Object.assign({ 'x-goog-api-key': Gem.key }, body ? { 'Content-Type': 'application/json' } : {}), body: body ? JSON.stringify(body) : undefined, signal });
-  } catch (e) {
-    if (e && e.name === 'AbortError') throw { code: 'cancelled' };
-    throw { code: S.standalone ? 'network' : 'blocked' };          // inside Claude the page may not reach other sites
-  }
-  let j = null; try { j = await r.json(); } catch (e) {}
-  if (!r.ok) {
-    const er = (j && j.error) || {}, det = Array.isArray(er.details) ? er.details : [];
-    const reason = String((det.find(d => d && d.reason) || {}).reason || '');
-    throw { code: 'http', status: r.status, gstatus: String(er.status || ''), reason, message: String(er.message || '').slice(0, 240) };
-  }
-  return j;
-}
 async function gemServer(msg, signal) {
   let tok = '';
   try { const s = await Cloud.sb.auth.getSession(); tok = s && s.data && s.data.session ? s.data.session.access_token : ''; } catch (e) {}
@@ -3663,46 +3689,15 @@ async function gemServer(msg, signal) {
   const det = Array.isArray(er.details) ? er.details : [];
   throw { code: 'http', via: 'server', status: r.status, gstatus: String(er.status || ''), reason: String((det.find(d => d && d.reason) || {}).reason || ''), message: String(er.message || '').slice(0, 240) };
 }
-// through Supabase when signed in; the key saved in this browser is used only when that route can't scan
-async function gemCall(model, body, signal) {
-  if (Gem.viaServer()) {
-    try { const j = await gemServer(model ? { op: 'generate', model, body } : { op: 'models' }, signal); Gem.server = true; Gem.serverWhy = ''; return j; }
-    catch (e) {
-      if (!e || e.code !== 'server_off') throw e;
-      Gem.server = false; Gem.serverWhy = e.why || '';
-      if (!Gem.key) throw e;
-    }
-  }
-  if (!Gem.key) throw { code: 'no_key' };
-  return gemFetch(model ? 'models/' + encodeURIComponent(model) + ':generateContent' : 'models?pageSize=1000', body, signal);
+// every scan asks Supabase for Gemini 3.8 Flash; there is no browser key and no other model
+async function gemCall(body, signal) {
+  try { return await gemServer({ op: 'generate', model: GEM_MODEL, body }, signal); }
+  catch (e) { if (e && e.code === 'server_off') Gem.serverWhy = e.why || ''; throw e; }
 }
-const gemVia = () => Gem.viaServer() ? 'server' : 'key';
 function gemNeed() {
-  if (!Gem.key) return 'Add a Gemini API key in Settings to scan pictures.';
-  return gemErr({ code: 'server_off', via: 'server', why: Gem.serverWhy }) + ' Or add a Gemini API key to this browser.';
+  if (!Cloud.user || !Cloud.role) return 'Sign in to scan with the Gemini key kept in Supabase.';
+  return gemErr({ code: 'server_off', via: 'server', why: Gem.serverWhy });
 }
-// which models this key may use; "newest" is read from Google's own list, so it keeps up with new releases
-function gemParse(m) {
-  const id = String((m && m.name) || '').replace(/^models\//, '');
-  const g = /^gemini-(\d+(?:\.\d+)?)-([a-z0-9.\-]+)$/.exec(id);
-  if (!g || /-latest$/.test(id)) return null;
-  if (!Array.isArray(m.supportedGenerationMethods) || !m.supportedGenerationMethods.includes('generateContent')) return null;
-  if (/(tts|live|image|embed|transcribe|robotics|omni|banana|computer|audio|lyria|veo|imagen|aqa|research|antigravity|learnlm|(^|-)exp)/.test(g[2])) return null;
-  return { id, name: String(m.displayName || id).slice(0, 60), v: parseFloat(g[1]), preview: /preview|exp/.test(g[2]), tier: /lite/.test(g[2]) ? 1 : /flash/.test(g[2]) ? 2 : 3 };
-}
-const gemRank = (a, b) => b.v - a.v || (a.preview - b.preview) || b.tier - a.tier;
-function gemPick(kind) {
-  const ms = (Gem.models || []).filter(m => !Gem.noUse[m.id]);
-  return (kind === 'flash' ? ms.filter(m => m.tier === 2) : ms).slice().sort(gemRank)[0] || null;
-}
-async function gemList(force) {
-  if (Gem.models && !force) return Gem.models;
-  const j = await gemCall('', null);
-  Gem.models = (j && Array.isArray(j.models) ? j.models : []).map(gemParse).filter(Boolean).sort(gemRank).slice(0, 40);
-  Gem.listedAt = Date.now(); Gem.save();
-  return Gem.models;
-}
-function gemChain() { return [GEM_MODEL]; }
 function looseJson(t) {
   try { return JSON.parse(t); } catch (e) {}
   const f = /```(?:json)?\s*([\s\S]*?)```/.exec(t); if (f) { try { return JSON.parse(f[1]); } catch (e) {} }
@@ -3721,27 +3716,26 @@ function gemJson(j) {
 }
 function gemErr(e) {
   if (!e) return 'Gemini could not scan this page.';
-  const srv = e.via === 'server', k = srv ? 'The Gemini key in Supabase' : 'This key', kl = srv ? 'the Gemini key in Supabase' : 'this key';
   switch (e.code) {
     case 'cancelled': return '';
-    case 'no_key': return 'Add a Gemini API key in Settings.';
+    case 'no_key': return 'Sign in to scan with Gemini.';
     case 'server_off':
       if (e.why === 'not_configured') return 'Scanning through Supabase needs the GEMINI_API_KEY secret. Add it to the GitHub repository secrets and run the Gemini function workflow.';
       if (e.why === 'network') return 'The Gemini scan function in Supabase could not be reached. It may not be deployed yet.';
       return 'The Gemini scan function (gemini-extract) is not ' + (e.why === 'missing' ? 'deployed to Supabase yet.' : 'working in Supabase right now.');
-    case 'server_auth': return 'Sign in again under Supabase copy to scan with Gemini.';
+    case 'server_auth': return 'Sign in again to scan with Gemini.';
     case 'not_allowed': return 'This account is not on the kitchen staff list, so it can’t scan with Gemini.';
     case 'blocked': return 'Gemini can’t be reached from inside Claude. Open your own copy of this page to use it.';
-    case 'network': return srv ? 'Supabase could not reach Gemini. Try again in a minute.' : 'Gemini could not be reached. Check the internet connection and try again.';
+    case 'network': return 'Supabase could not reach Gemini. Try again in a minute.';
     case 'declined': return 'Gemini declined to read this page.';
     case 'too_long': return 'Gemini’s answer was cut short. Draw a box around the table and scan again.';
     case 'bad_json': case 'empty': return 'Gemini’s answer could not be turned into rows. Try again.';
     case 'http':
-      if (e.reason === 'API_KEY_INVALID' || /api key not valid|invalid api key/i.test(e.message)) return srv ? 'Google says the Gemini key in Supabase is not valid. Replace the GEMINI_API_KEY secret.' : 'Google says this API key is not valid. Check it in Settings.';
-      if (/REFERRER|referer/i.test(e.reason + ' ' + e.message)) return srv ? 'The Gemini key in Supabase is limited to certain websites. A key used from a server needs no website restriction.' : 'This API key is limited to certain websites, and this page is not one of them. Change the key’s restrictions in Google Cloud.';
-      if (e.status === 429) return k + ' has used up its Gemini quota for now. Try again later, or choose a Flash model in Settings.';
-      if (e.status === 403) return k + ' is not allowed to use Gemini. Check that the Gemini API is enabled for its Google project.';
-      if (e.status === 404) return 'That Gemini model is not available to ' + kl + '. Choose another in Settings.';
+      if (e.reason === 'API_KEY_INVALID' || /api key not valid|invalid api key/i.test(e.message)) return 'Google says the Gemini key in Supabase is not valid. Replace the GEMINI_API_KEY secret.';
+      if (/REFERRER|referer/i.test(e.reason + ' ' + e.message)) return 'The Gemini key in Supabase is limited to certain websites. A key used from a server needs no website restriction.';
+      if (e.status === 429) return 'The Gemini key in Supabase has used up its quota for now. Try again later.';
+      if (e.status === 403) return 'The Gemini key in Supabase is not allowed to use Gemini. Check that the Gemini API is enabled for its Google project.';
+      if (e.status === 404) return 'Gemini 3.8 Flash (gemini-3.8-flash) is not available to the Gemini key in Supabase.';
       if (e.status >= 500) return 'Gemini is busy or having trouble. Try again in a minute.';
       return 'Gemini refused the request' + (e.message ? ': ' + hideKey(e.message) : '.');
   }
@@ -3813,18 +3807,9 @@ async function geminiScan(doc) {
     }
     if (doc.pages.length > n) parts.push({ text: 'Only the first ' + n + ' of ' + doc.pages.length + ' pages are shown.' });
     const body = { contents: [{ role: 'user', parts }], generationConfig: { responseMimeType: 'application/json' }, store: false };
-    let out = null, used = '', last = null;
-    for (const model of gemChain()) {
-      doc.gemModel = model; renderStatus();
-      try { out = gemJson(await gemCall(model, body, ctl.signal)); used = model; break; }
-      catch (e) {
-        last = e;
-        // "newest" may be a model this key cannot use yet (Argon is paid-tier only): step down to the newest Flash
-        if (e.code === 'http' && (Gem.model === 'auto' || Gem.model === 'flash') && [403, 404, 429].includes(e.status) && !/API_KEY_INVALID|REFERRER/.test(e.reason)) { Gem.noUse[model] = 1; continue; }
-        throw e;
-      }
-    }
-    if (!out) throw last || { code: 'empty' };
+    doc.gemModel = GEM_MODEL; renderStatus();
+    const out = gemJson(await gemCall(body, ctl.signal));
+    const used = GEM_MODEL;
     // a picture page Gemini says is not upright is turned and scanned once more, so the boxes land in the right place
     if (!doc.gemTurned) {
       const rs = Array.isArray(out.rotation) ? out.rotation : [out.rotation]; let n = 0, deg = 0;
@@ -4101,7 +4086,7 @@ const Cloud = {
     if (!this.watching()) return;
     for (const id of new Set(Object.keys(now).concat(Object.keys(was)))) if (now[id] !== was[id]) this.mark('tpl:' + id, at);
   },
-  settingsData() { return { autoLayout: !!S.autoTpl, folderAuto: !!Files.auto, folderSub: !!Files.sub, geminiModel: Gem.model, geminiAuto: !!Gem.auto }; },
+  settingsData() { return { autoLayout: !!S.autoTpl, folderAuto: !!Files.auto, folderSub: !!Files.sub }; },
   settingsChanged() {
     if (!this.loaded || this.applying) return;
     const sig = JSON.stringify(this.settingsData()); if (sig === this.meta.setSig) return;
@@ -4153,7 +4138,7 @@ const Cloud = {
     const u = raw ? { id: raw.id, email: raw.email || '', name: (raw.user_metadata && raw.user_metadata.username) || userLabel(raw.email) } : null;
     this.booted = true;
     if ((u && u.id) === (this.user && this.user.id) && (!u || this.checked)) { renderGate(); return; }
-    this.user = u; this.role = null; this.checked = false; this.libraryId = null; Gem.server = null; Gem.serverWhy = '';
+    this.user = u; this.role = null; this.checked = false; this.libraryId = null; Gem.serverWhy = '';
     if (!u) { this.setState('off'); renderSb(); return; }
     this.gateMsg = ''; renderSb();
     const who = u;
@@ -4405,9 +4390,7 @@ const Cloud = {
     if (typeof d.autoLayout === 'boolean') { S.autoTpl = d.autoLayout; try { localStorage.setItem(AUTO_TPL_KEY, d.autoLayout ? '1' : '0'); } catch (e) {} }
     if (typeof d.folderAuto === 'boolean') Files.auto = d.folderAuto;
     if (typeof d.folderSub === 'boolean') Files.sub = d.folderSub;
-    Gem.model = GEM_MODEL;
-    if (typeof d.geminiAuto === 'boolean') Gem.auto = d.geminiAuto;
-    Files.save(); Gem.save();
+    Files.save();
   },
   // the one-time copy of everything already in this browser
   uploadAll() {
@@ -4468,8 +4451,7 @@ function sbBoxHtml() {
 function renderSb(msg) {
   if (msg != null) Cloud.msg = msg;
   const box = $('#sb-box'); if (box) box.innerHTML = sbBoxHtml();
-  const gv = $('#g-via'); if (gv) gv.innerHTML = gemViaHtml();
-  const ck = $('#settings [data-set="check"]'); if (ck) ck.disabled = !Gem.can() && !Cloud.ready();
+  const gv = $('#g-via'); if (gv) gv.remove();
   renderSyncPill(); renderGate();
 }
 function sbSetKey(v) {
@@ -4616,21 +4598,19 @@ function staffAct(act, b) {
     clearTimeout(staffAct.t); staffCall({ op: 'remove', email }, email + ' was removed.');
   }
 }
-window.addEventListener('online', () => { if (Gem.server === false && Gem.serverWhy === 'network') Gem.server = null; if (Cloud.ready()) Cloud.syncNow(); else if (Cloud.key && !Cloud.sb) Cloud.connect(); });
+window.addEventListener('online', () => { if (Gem.serverWhy === 'network') Gem.serverWhy = ''; if (Cloud.ready()) Cloud.syncNow(); else if (Cloud.key && !Cloud.sb) Cloud.connect(); });
 window.addEventListener('offline', () => { if (Cloud.sb) Cloud.setState('offline', ''); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && Cloud.ready() && Date.now() - sbTime(Cloud.meta.pulledAt) > 300000) Cloud.syncNow(); });
 
 /* settings */
 function openSettings(note) {
   S.setNote = note || ''; renderSettings(''); $('#settings').hidden = false;
-  setTimeout(() => { const k = $('#g-key'); if (k) k.focus(); }, 30);
   if (Files.dir) { const was = Files.perm; Files.ready(false).then(() => { if (Files.perm !== was && !$('#settings').hidden) renderSettings(''); }); }
 }
 function closeSettings() {
-  const k = $('#g-key'); if (k && k.value.trim()) { Gem.setKey(k.value.trim()); k.value = ''; }        // a pasted key is kept even without Save key
   const sk = $('#sb-key'); if (sk && sk.value.trim()) { const v = sk.value.trim(); sk.value = ''; sbSetKey(v); }
   Cloud.msg = '';
-  $('#settings').hidden = true; S.setNote = ''; S.keyEdit = false; renderStatus();
+  $('#settings').hidden = true; S.setNote = ''; renderStatus();
   if (!closeSettings.quiet && S.mob === 'settings') {
     S.mob = S.mobFrom || 'viewer';
     try { localStorage.setItem(MOB_KEY, S.mob); } catch (e) {}
@@ -4638,11 +4618,6 @@ function closeSettings() {
   }
 }
 function renderSettings(msg) {
-  // the saved key is never written back into the page: there is only a "saved" state, Replace and Forget
-  const keyBox = Gem.key && !S.keyEdit
-    ? '<div class="keysaved"><span class="pill good">Key saved' + (Gem.remember ? ' in this browser' : ' until this page closes') + '</span><button class="btn small" type="button" data-set="replace">Replace</button><button class="btn small" type="button" data-set="forget">Forget</button></div>'
-    : '<div class="row"><input id="g-key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="' + (Gem.key ? 'Paste the new key' : 'Paste the key from Google AI Studio') + '" aria-describedby="g-keynote"><button class="btn small primary" type="button" data-set="savekey" disabled>Save key</button>' +
-      (Gem.key ? '<button class="btn small" type="button" data-set="cancelkey">Cancel</button>' : '') + '</div>';
   const folder = !Files.can
     ? '<p class="note">This browser can’t save invoices into a folder you choose: Safari, iPhone and iPad, Firefox and Android don’t let web pages do that. Each invoice has a <b>Download a copy</b> button under Details instead. Chrome or Edge on a computer can save into a folder.</p>'
     : (Files.dir
@@ -4658,56 +4633,23 @@ function renderSettings(msg) {
     '<div id="sb-box">' + sbBoxHtml() + '</div>' +
     (Cloud.isAdmin() ? '<h3 class="sec">Staff</h3><div id="staff-box">' + staffBoxHtml() + '</div>' : '') +
     '<h3 class="sec">Invoice folder</h3>' + folder +
-    '<h3 class="sec">Scanning with Gemini</h3>' +
-    '<p class="note">When a page is a picture, or its text can’t be read, Gemini looks at it, places the boxes and reads the line items. On pages with readable text the values still come from the text, so they stay exact.</p>' +
-    (S.standalone ? '' : '<p class="pill warn">Inside Claude this page can only reach Claude, so Gemini works in your own copy of the page: the invoice_scraper.html file opened in Chrome, Edge or Safari, or put on your own site.</p>') +
-    '<div id="g-via">' + gemViaHtml() + '</div>' +
-    '<div class="field"><label for="g-key">Gemini API key in this browser (fallback)</label>' + keyBox +
-    '<p class="note" id="g-keynote">Only needed when scanning through Supabase isn’t set up. Make one at aistudio.google.com/apikey (<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">open it</a>). Once saved, the key is never shown again, not even here. It goes only to Google, with the page images, and scans are billed to that key’s Google account.</p></div>' +
-    '<label class="chk" for="g-remember"><input type="checkbox" id="g-remember"' + (Gem.remember ? ' checked' : '') + '>Remember the key in this browser</label>' +
-    '<label class="chk" for="g-auto"><input type="checkbox" id="g-auto"' + (Gem.auto ? ' checked' : '') + '>Scan automatically when an opened page is a picture or can’t be read</label>' +
-    '<div class="row"><button class="btn primary" type="button" data-set="check"' + (Gem.can() || Cloud.ready() ? '' : ' disabled') + '>Check Gemini</button><button class="btn" type="button" data-set="close">Done</button></div>' +
-    '<p class="note" id="g-msg" aria-live="polite">' + hideKey(msg) + '</p></div>';
-}
-// the key behind the Supabase route stays in Supabase secrets; this only says which route scans use
-function gemViaHtml() {
-  if (!Cloud.key) return '';
-  if (!Cloud.user || !Cloud.role) return '<p class="note">Sign in to scan with the Gemini key kept in Supabase. It never comes to this page.</p>';
-  if (Gem.server === false) return '<p class="pill warn">' + esc(gemErr({ code: 'server_off', via: 'server', why: Gem.serverWhy })) + (Gem.key ? ' Using the key saved in this browser for now.' : '') + '</p>';
-  return '<p class="pill good">' + (Gem.server ? 'Scans go through your Supabase project' : 'Scans will go through your Supabase project') + '</p>' +
-    '<p class="note">The Gemini key is kept in Supabase and never comes to this page.' + (Gem.key ? ' A key is also saved in this browser; it is used only if Supabase can’t scan. You can Forget it below.' : '') + '</p>';
-}
-function gemModelsLine() {
-  const a = gemPick('any'), f = gemPick('flash');
-  return 'Key works. Newest model: <b>' + esc(a ? a.name : 'none listed') + '</b>' + (f && f !== a ? '. Newest Flash: <b>' + esc(f.name) + '</b>' : '') + '.';
+    (msg ? '<p class="note" aria-live="polite">' + hideKey(msg) + '</p>' : '') +
+    '<div class="row"><button class="btn" type="button" data-set="close">Done</button></div></div>';
 }
 $('#settings').addEventListener('click', async e => {
   if (e.target.id === 'settings') return closeSettings();                       // the backdrop
   const b = e.target.closest('button[data-set]'); if (!b) return;
-  const act = b.dataset.set, key = $('#g-key');
+  const act = b.dataset.set;
   if (act.startsWith('sb-')) return sbAct(act);
   if (act.startsWith('staff-')) return staffAct(act, b);
   if (act === 'close') return closeSettings();
-  if (act === 'replace') { S.keyEdit = true; renderSettings(''); const k = $('#g-key'); if (k) k.focus(); return; }
-  if (act === 'cancelkey') { S.keyEdit = false; renderSettings(''); return; }
-  if (act === 'savekey') { const v = key ? key.value.trim() : ''; if (key) key.value = ''; if (!v) return; Gem.setKey(v); S.keyEdit = false; renderSettings('Key saved. Check it to see which models it can use.'); renderStatus(); return; }
-  if (act === 'forget') { Gem.setKey(''); S.keyEdit = false; renderSettings('Key removed from this page.'); renderStatus(); return; }
   if (act === 'folder-pick') { await pickFolder(); renderSettings(''); return; }
   if (act === 'folder-allow') { if (await Files.ready(true)) { Files.waiting = false; S.docs.forEach(queueFileSave); await flushFileSave(true); } renderSettings(''); renderAll(); return; }
   if (act === 'folder-forget') { await Files.forget(); renderSettings('Invoices will no longer be saved into a folder.'); renderAll(); return; }
-  if (act === 'check') {
-    if (key && key.value.trim()) { Gem.setKey(key.value.trim()); key.value = ''; S.keyEdit = false; }
-    if (Gem.server === false) Gem.server = null;
-    if (!Gem.can()) return;
-    renderSettings(gemVia() === 'server' ? 'Asking Google, through Supabase, which models the project’s key can use…' : 'Asking Google which models this key can use…'); const btn = $('#settings [data-set="check"]'); if (btn) btn.disabled = true;
-    try { await gemList(true); Gem.noUse = {}; renderSettings(gemModelsLine()); }
-    catch (err) { if (err && err.code === 'blocked') Gem.blocked = true; renderSettings(esc(gemErr(err))); }
-    renderStatus();
-  }
 });
 $('#settings').addEventListener('change', e => {
   const t = e.target;
-  if (t.id === 'g-key' || t.id === 'sb-key' || t.id === 'staff-user' || t.id === 'staff-pass' || t.id === 'staff-newrole') return;
+  if (t.id === 'sb-key' || t.id === 'staff-user' || t.id === 'staff-pass' || t.id === 'staff-newrole') return;
   if (t.dataset.staffRole) { const email = t.dataset.staffRole; staffCall({ op: 'role', email, role: t.value }, email + ' is now ' + (t.value === 'admin' ? 'an admin' : 'staff') + '.'); return; }
   if (t.id === 'sb-url') {
     const v = t.value.trim().replace(/\/+$/, '');
@@ -4715,24 +4657,21 @@ $('#settings').addEventListener('change', e => {
     if (v !== Cloud.url) { Cloud.ownUrl = v === SB_HOME ? '' : v; Cloud.pick(); Cloud.save(); Cloud.disconnect().then(() => Cloud.key && Cloud.connect()).then(() => renderSb()); renderSb('Project URL saved.'); }
     return;
   }
-  if (t.id === 'g-remember') { Gem.remember = t.checked; Gem.save(); }
-  else if (t.id === 'g-auto') { Gem.auto = t.checked; Gem.save(); }
-  else if (t.id === 'f-auto') { Files.auto = t.checked; Files.save(); if (Files.auto) { S.docs.forEach(queueFileSave); } }
+  if (t.id === 'f-auto') { Files.auto = t.checked; Files.save(); if (Files.auto) { S.docs.forEach(queueFileSave); } }
   else if (t.id === 'f-sub') { Files.sub = t.checked; Files.save(); }
   renderStatus();
 });
 $('#settings').addEventListener('input', e => {
-  const btn = { 'g-key': 'savekey', 'sb-key': 'sb-savekey' }[e.target.id];
+  const btn = { 'sb-key': 'sb-savekey' }[e.target.id];
   if (btn) { const sb = $('#settings [data-set="' + btn + '"]'); if (sb) sb.disabled = !e.target.value.trim(); }
 });
 $('#settings').addEventListener('keydown', e => {
-  const btn = { 'g-key': 'savekey', 'sb-key': 'sb-savekey', 'staff-user': 'staff-add', 'staff-pass': 'staff-add' }[e.target.id];
+  const btn = { 'sb-key': 'sb-savekey', 'staff-user': 'staff-add', 'staff-pass': 'staff-add' }[e.target.id];
   if (btn && e.key === 'Enter') { e.preventDefault(); const sb = $('#settings [data-set="' + btn + '"]'); if (sb && !sb.disabled) sb.click(); }
 });
 // the key never appears in a message, whatever an error or a server says
 function hideKey(s) {
   s = String(s == null ? '' : s);
-  if (Gem.key && Gem.key.length >= 8) s = s.split(Gem.key).join('••••');
   if (Cloud.key && Cloud.key.length >= 8) s = s.split(Cloud.key).join('••••');
   return s.replace(/AIza[0-9A-Za-z_\-]{20,}/g, '••••').replace(/eyJ[\w\-]{6,}\.[\w\-]{6,}\.[\w\-]{6,}/g, '••••').replace(/sb_(publishable|secret)_[\w\-]{6,}/gi, '••••');
 }
@@ -4810,7 +4749,7 @@ async function initCaps() {
   try { const d = await loadSample(); S.docs.push(d); S.cur = 0; await analyse(d); await showPage(); fit(); } catch (e) {}
   renderAll();
 })();
-if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) window.__scraper = { S, Engine, Library, Lib, Gem, Files, addFiles, run, renderAll, flushSync, geminiScan, inkTurn, rotCanvas, flushAutoTpl, flushFileSave, fileTo, toast, hideKey, Cloud, Store };
+if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) window.__scraper = { S, Engine, Library, Lib, Gem, Files, addFiles, run, renderAll, flushSync, geminiScan, inkTurn, rotCanvas, flushAutoTpl, flushFileSave, fileTo, toast, hideKey, Cloud, Store, Logos, GEM_MODEL, logoTag };
 })();
 </script>
 </body>

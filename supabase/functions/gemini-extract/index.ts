@@ -3,10 +3,11 @@
 // here against Supabase Auth, which also works with the newer asymmetric JWT signing keys.
 //
 // POST { op: "models" }                        -> Gemini's model list
-// POST { op: "generate", model, body }         -> Gemini generateContent for that model
+// POST { op: "generate", model, body }         -> generateContent for Gemini 3.8 Flash only
 // Gemini's own status and JSON are passed back unchanged. Errors raised here carry error.proxy = true.
 
 const GEM_API = 'https://generativelanguage.googleapis.com/v1beta/';
+const GEM_MODEL = 'gemini-3.8-flash';
 const MAX_BODY = 30 * 1024 * 1024;
 
 const cors = {
@@ -74,12 +75,12 @@ Deno.serve(async (req: Request) => {
     path = 'models?pageSize=1000';
     init = { method: 'GET' };
   } else if (msg.op === 'generate') {
-    const model = String(msg.model || '');
-    if (!/^gemini-[\w.\-]{1,80}$/.test(model)) return fail(400, 'bad_model', 'That is not a Gemini model name.');
+    const asked = String(msg.model || '');
+    if (asked !== GEM_MODEL) return fail(400, 'bad_model', 'Scans use gemini-3.8-flash only.');
     const b = msg.body && typeof msg.body === 'object' ? msg.body : null;
     if (!b || !Array.isArray(b.contents)) return fail(400, 'bad_request', 'Nothing to scan.');
     const body = { contents: b.contents, generationConfig: b.generationConfig, store: false };
-    path = 'models/' + encodeURIComponent(model) + ':generateContent';
+    path = 'models/' + GEM_MODEL + ':generateContent';
     init = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
   } else {
     return fail(400, 'bad_op', 'Unknown operation.');

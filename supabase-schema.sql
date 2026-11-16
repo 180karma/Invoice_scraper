@@ -346,3 +346,27 @@ drop function if exists public.is_admin();
 drop function if exists public.is_staff();
 drop function if exists public.kitchen_library_id();
 drop function if exists public.staff_role();
+
+-- supplier logos: a private Storage bucket. The page never puts a key in the image address.
+-- Object path is one file per supplier: {supplier id}.jpg
+--   supplier id is the ABN (digits only) when the supplier has one,
+--   otherwise the normalised name with spaces and slashes turned into hyphens
+--   (for example 51824763910.jpg or joe-s-cafe.jpg).
+-- The bucket stays private. Signed-in staff read a short-lived signed URL and can replace the file.
+insert into storage.buckets (id, name, public)
+values ('supplier-logos', 'supplier-logos', false)
+on conflict (id) do update set public = false;
+
+drop policy if exists "staff read supplier logos" on storage.objects;
+drop policy if exists "staff write supplier logos" on storage.objects;
+drop policy if exists "staff update supplier logos" on storage.objects;
+create policy "staff read supplier logos" on storage.objects
+  for select to authenticated
+  using (bucket_id = 'supplier-logos' and (select private.is_staff()));
+create policy "staff write supplier logos" on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'supplier-logos' and (select private.is_staff()));
+create policy "staff update supplier logos" on storage.objects
+  for update to authenticated
+  using (bucket_id = 'supplier-logos' and (select private.is_staff()))
+  with check (bucket_id = 'supplier-logos' and (select private.is_staff()));
