@@ -7,6 +7,9 @@
 -- The page asks for a username and password. Supabase still stores each person as
 -- name@users.invoice.local, which is never emailed. The Admin account is created in Auth
 -- (username Admin) and listed below. Anyone signed in can view and add invoices.
+-- If that username is gone, the sign-in page can email a magic link. The block at the
+-- end of this file (claim_kitchen_admin) lets that signed-in email become admin when
+-- no admin row remains. The address is not written in this file.
 -- Staff can correct an invoice they added themselves for 24 hours. Admins can also
 -- change and delete records and manage usernames.
 -- updated_at is set by the app from its local edit time, so devices merge newest-wins.
@@ -380,3 +383,55 @@ drop policy if exists "admin delete supplier logos" on storage.objects;
 create policy "admin delete supplier logos" on storage.objects
   for delete to authenticated
   using (bucket_id = 'supplier-logos' and (select private.is_admin()));
+
+-- Locked out: paste this block into the SQL editor and run it. Safe to re-run.
+-- When no admin row remains, the signed-in page calls claim_kitchen_admin().
+-- The email is taken from that sign-in. Nothing here names an address or a password.
+create or replace function private.claim_kitchen_admin()
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  em text := lower(btrim(coalesce((select auth.jwt()) ->> 'email', '')));
+  current_role text;
+  admins int;
+begin
+  if em = '' or position('@' in em) < 2 then
+    raise exception 'Sign in first.';
+  end if;
+  perform pg_catalog.pg_advisory_xact_lock(814213);
+  select count(*) into admins from public.staff s where s.role = 'admin';
+  select s.role into current_role from public.staff s where s.email = em;
+  if current_role = 'admin' then
+    return 'admin';
+  end if;
+  if admins > 0 then
+    raise exception 'An admin already exists. Ask them to add you.';
+  end if;
+  if current_role is not null then
+    update public.staff set role = 'admin' where email = em;
+  else
+    insert into public.staff (email, role) values (em, 'admin');
+  end if;
+  return 'admin';
+end;
+$$;
+
+revoke all on function private.claim_kitchen_admin() from public, anon;
+grant execute on function private.claim_kitchen_admin() to authenticated;
+
+create or replace function public.claim_kitchen_admin()
+returns text
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+begin
+  return private.claim_kitchen_admin();
+end;
+$$;
+
+revoke all on function public.claim_kitchen_admin() from public, anon;
+grant execute on function public.claim_kitchen_admin() to authenticated;

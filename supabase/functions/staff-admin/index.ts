@@ -119,8 +119,9 @@ Deno.serve(async (req: Request) => {
       if (target.role === 'admin' && role !== 'admin' && admins <= 1) return fail(409, 'last_admin', 'The kitchen needs at least one admin.');
       await rest('staff?email=eq.' + encodeURIComponent(email), { method: 'PATCH', body: JSON.stringify({ role }) });
     } else if (msg.op === 'remove') {
+      if (!target) return fail(404, 'not_found', 'That username is not on the staff list.');
+      if (staff.length <= 1 || (target.role === 'admin' && admins <= 1)) return fail(409, 'last_sign_in', 'This is the last sign-in. It stays so the kitchen can still be opened.');
       if (email === me) return fail(409, 'self', 'You can’t remove yourself. Ask another admin.');
-      if (target && target.role === 'admin' && admins <= 1) return fail(409, 'last_admin', 'The kitchen needs at least one admin.');
       await rest('staff?email=eq.' + encodeURIComponent(email), { method: 'DELETE' });
       const id = await authUserId(email);
       if (id) {

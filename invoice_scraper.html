@@ -338,6 +338,7 @@ a.contact:hover { background: var(--wash); text-decoration: underline; text-unde
 .gate .card { max-width: 420px; }
 .gate .card > * { margin: 0; }
 .gate .row input { flex: 1 1 180px; min-width: 0; height: 38px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 0 10px; }
+.gate pre.sql { margin: 0; white-space: pre-wrap; word-break: break-word; font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; max-height: 220px; overflow: auto; }
 #staff-box { display: flex; flex-direction: column; gap: 8px; }
 .staffrow { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .staffrow .who { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
@@ -4059,7 +4060,7 @@ const Cloud = {
   KEY: 'invoice-scraper.supabase.v1', QKEY: 'invoice-scraper.supabase.queue.v1', MKEY: 'invoice-scraper.supabase.meta.v1',
   url: SB_HOME, key: '', ownUrl: '', ownKey: '', keyFrom: '', sb: null, user: null, libraryId: null, state: 'off', err: '', loaded: false, applying: false,
   sentTo: '', email: '', keyEdit: false, msg: '', dirty: {}, meta: null, tplSnap: {}, timer: 0, tries: 0, chain: Promise.resolve(), connecting: null,
-  role: null, checked: false, booted: false, gateMsg: '',
+  role: null, checked: false, booted: false, gateMsg: '', claimErr: '', linkEmail: '', linkSent: false, gateBusy: false,
   freshMeta() { return { uid: '', flagAt: {}, setAt: '', setSig: '', folders: {}, lc: {}, sup: {}, uploadedAt: '', pulledAt: '', role: '', roleEmail: '', logoRm: [], supGone: {}, gone: {}, seen: {} }; },
   // Admin on the staff list. When ADMIN_EMAILS is set, only those sign-in emails count, so other accounts cannot delete.
   isAdmin() {
@@ -4073,12 +4074,32 @@ const Cloud = {
   limited() { return !!(this.key && this.role && !this.isAdmin()); },
   // a person who signed in on this device before may keep working while Supabase can't be reached
   offlinePass() { return !this.user && !!this.meta && (this.meta.role === 'admin' || this.meta.role === 'staff') && (this.state === 'offline' || !navigator.onLine); },
+  // ADMIN_EMAILS, when set, is the only mailbox that may take the empty admin seat. An empty list means the first signed-in person.
+  // A list of only @users.invoice.local addresses cannot receive a magic link, so a real inbox may claim that empty seat.
+  mayClaimAdmin() {
+    const email = String(this.user && this.user.email || '').toLowerCase();
+    if (!email.includes('@')) return false;
+    const list = SB_ENV.adminEmails || [];
+    if (!list.length || list.includes(email)) return true;
+    return !email.endsWith('@' + USER_MAIL) && list.every(e => String(e).endsWith('@' + USER_MAIL));
+  },
+  async claimAdmin() {
+    const { data, error } = await this.sb.rpc('claim_kitchen_admin');
+    if (error) { this.claimErr = this.say(error); return null; }
+    return data === 'admin' || data === 'staff' ? data : null;
+  },
   async loadRole() {
     const email = String(this.user.email || '').toLowerCase();
+    this.claimErr = '';
     try {
       const { data, error } = await this.sb.from('staff').select('role').eq('email', email).maybeSingle();
       if (error) throw error;
       this.role = data && (data.role === 'admin' || data.role === 'staff') ? data.role : null;
+      if (this.mayClaimAdmin() && this.role !== 'admin') {
+        const claimed = await this.claimAdmin();
+        if (claimed) this.role = claimed;
+        else if (this.role) this.claimErr = '';
+      }
       this.meta.role = this.role || ''; this.meta.roleEmail = email; this.saveMeta();
     } catch (e) {
       if (!(this.isNetwork(e) && this.meta.roleEmail === email && this.meta.role)) throw e;
@@ -4303,6 +4324,7 @@ const Cloud = {
     const m = String((e && (e.message || e.error_description || e.msg)) || e || 'Unknown error');
     if (/shared kitchen library is not set up|app_meta/i.test(m)) return 'The shared kitchen library is not set up. Run supabase-schema.sql in the Supabase SQL editor.';
     if (/invalid api key|no api key|apikey/i.test(m)) return 'Supabase did not accept the key. Check it is the anon or publishable key for this project.';
+    if (/claim_kitchen_admin/i.test(m)) return 'The restore step is not in Supabase yet. In the SQL editor, run the block at the end of supabase-schema.sql that starts with claim_kitchen_admin, then choose Check again.';
     if (/relation .* does not exist|could not find the table|schema cache/i.test(m)) return 'The tables are not set up in Supabase yet. Run supabase-schema.sql in its SQL editor.';
     if (this.meta && this.meta.logoRm && this.meta.logoRm.length && /row-level|unauthorized|permission|policy|violat/i.test(m)) return 'Supabase refused to delete a supplier logo. In the SQL editor, run the block at the end of supabase-schema.sql that starts with admin delete supplier logos.';
     if (/row-level security|violates row-level|permission denied/i.test(m)) return 'Supabase refused the write. Run supabase-schema.sql in its SQL editor.';
@@ -4690,36 +4712,66 @@ async function sbAct(act) {
 }
 async function signOutAll() {
   const C = Cloud;
-  C.meta.role = ''; C.meta.roleEmail = ''; C.saveMeta();
+  C.meta.role = ''; C.meta.roleEmail = ''; C.claimErr = ''; C.linkSent = false; C.gateBusy = false; C.saveMeta();
   await C.disconnect(); C.sentTo = ''; Staff.list = null; Staff.msg = '';
   if (!$('#settings').hidden) closeSettings();
   renderSb(); renderAll();
 }
 
 /* sign-in screen: with a Supabase key, the page opens only for people on the staff list */
+const CLAIM_SQL = [
+  'create or replace function private.claim_kitchen_admin() returns text language plpgsql security definer set search_path = \'\' as $$',
+  'declare em text := lower(btrim(coalesce((select auth.jwt()) ->> \'email\', \'\'))); current_role text; admins int;',
+  'begin',
+  '  if em = \'\' or position(\'@\' in em) < 2 then raise exception \'Sign in first.\'; end if;',
+  '  perform pg_catalog.pg_advisory_xact_lock(814213);',
+  '  select count(*) into admins from public.staff s where s.role = \'admin\';',
+  '  select s.role into current_role from public.staff s where s.email = em;',
+  '  if current_role = \'admin\' then return \'admin\'; end if;',
+  '  if admins > 0 then raise exception \'An admin already exists. Ask them to add you.\'; end if;',
+  '  if current_role is not null then update public.staff set role = \'admin\' where email = em;',
+  '  else insert into public.staff (email, role) values (em, \'admin\'); end if;',
+  '  return \'admin\';',
+  'end $$;',
+  'revoke all on function private.claim_kitchen_admin() from public, anon;',
+  'grant execute on function private.claim_kitchen_admin() to authenticated;',
+  'create or replace function public.claim_kitchen_admin() returns text language plpgsql security invoker set search_path = \'\' as $$ begin return private.claim_kitchen_admin(); end $$;',
+  'revoke all on function public.claim_kitchen_admin() from public, anon;',
+  'grant execute on function public.claim_kitchen_admin() to authenticated;'
+].join('\n');
 function gateShown() { return S.standalone && !!Cloud.key && !(Cloud.user && Cloud.role) && !Cloud.offlinePass(); }
 function gateHtml() {
   const C = Cloud, msg = C.gateMsg ? '<p class="note" aria-live="polite">' + esc(hideKey(C.gateMsg)) + '</p>' : '';
   const down = C.state === 'error' || C.state === 'offline';
+  const emailForm = '<div class="field"><label for="gate-email">Email</label><input id="gate-email" type="email" autocomplete="email" autocapitalize="off" spellcheck="false" value="' + esc(C.linkEmail || '') + '"></div>' +
+    '<div class="row"><button class="btn primary" type="button" data-gate="email"' + (C.gateBusy ? ' disabled' : '') + '>Email me a sign-in link</button></div>' +
+    (C.linkSent ? '<div class="field"><label for="gate-code">Code from the email</label><input id="gate-code" type="text" inputmode="numeric" autocomplete="one-time-code" spellcheck="false"></div><div class="row"><button class="btn" type="button" data-gate="code"' + (C.gateBusy ? ' disabled' : '') + '>Use code</button></div>' : '') +
+    '<p class="note">Use this if the admin username was removed. Open the link in this browser. If ADMIN_EMAILS is set, use one of those addresses. A list that only has a username address cannot receive mail, so use the inbox you read. When no admin remains, that sign-in becomes the admin. No password is stored in the page.</p>';
   let body;
   if (!C.booted) body = '<p class="note">Checking sign-in…</p>';
-  else if (C.user && C.checked && !C.role) body = '<p><b>' + esc(C.user.name || userLabel(C.user.email)) + '</b> is not on the staff list. Ask an admin to add this username.</p>' +
-    '<div class="row"><button class="btn primary" type="button" data-gate="retry">Check again</button><button class="btn" type="button" data-gate="signout">Sign out</button></div>';
-  else if (C.user) body = down
+  else if (C.user && C.checked && !C.role) {
+    const who = esc(C.user.email || userLabel(C.user.email));
+    const allowed = C.mayClaimAdmin();
+    let why;
+    if (!allowed) why = '<p>Signed in as <b>' + who + '</b>. This address is not in ADMIN_EMAILS, so it cannot become the admin. Sign out and use an address from that list.</p>';
+    else if (C.claimErr) why = '<p>Signed in as <b>' + who + '</b>, and there is no admin row for this account.</p><p>' + esc(C.claimErr) + '</p>' + (/SQL editor/.test(C.claimErr) ? '<pre class="sql">' + esc(CLAIM_SQL) + '</pre>' : '');
+    else why = '<p>Signed in as <b>' + who + '</b>. No admin remains, and this address can take that place.</p>';
+    body = why + '<div class="row"><button class="btn primary" type="button" data-gate="retry">Check again</button><button class="btn" type="button" data-gate="signout">Sign out</button></div>';
+  } else if (C.user) body = down
     ? '<p class="pill bad">' + esc(hideKey(C.err || 'Supabase could not be reached.')) + '</p><div class="row"><button class="btn primary" type="button" data-gate="retry">Try again</button><button class="btn" type="button" data-gate="signout">Sign out</button></div>'
     : '<p class="note">Checking access for ' + esc(C.user.name || userLabel(C.user.email)) + '…</p>';
   else body = (down && C.err ? '<p class="pill warn">' + esc(hideKey(C.err)) + '</p>' : '') +
     '<div class="field"><label for="gate-user">Username</label><input id="gate-user" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" value="' + esc(C.email || '') + '"></div>' +
     '<div class="field"><label for="gate-pass">Password</label><input id="gate-pass" type="password" autocomplete="current-password"></div>' +
     '<div class="row"><button class="btn primary" type="button" data-gate="signin">Sign in</button></div>' +
-    '<p class="note">Ask an admin if you don’t have a username yet.</p>';
+    '<p class="note">Username and password, or an email link if that username is gone.</p>' + emailForm;
   return '<div class="card"><h2 id="gateTitle">Invoice Scraper</h2><p class="note">Sign in to see the kitchen library and add invoices to it.</p>' + body + msg + '</div>';
 }
 function renderGate(force) {
   const g = $('#gate'); if (!g) return;
   const show = gateShown();
   if (!show) { if (!g.hidden) { g.hidden = true; g.innerHTML = ''; renderGate.sig = ''; } return; }
-  const C = Cloud, sig = [C.booted, C.user && C.user.email, C.checked, C.role, C.gateMsg, C.state === 'error' || C.state === 'offline', C.err].join('|');
+  const C = Cloud, sig = [C.booted, C.user && C.user.email, C.checked, C.role, C.gateMsg, C.claimErr, C.linkSent, C.gateBusy, C.state === 'error' || C.state === 'offline', C.err].join('|');
   if (!force && !g.hidden && sig === renderGate.sig) return;
   renderGate.sig = sig; g.innerHTML = gateHtml(); g.hidden = false;
   const f = $('#gate-user'); if (f && !f.value) setTimeout(() => f.focus(), 30);
@@ -4754,12 +4806,52 @@ async function gateAct(act) {
     else renderGate(true);
     return;
   }
+  if (act === 'email') {
+    const n = $('#gate-email');
+    const email = n ? n.value.trim().toLowerCase() : '';
+    C.linkEmail = email;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return say('Type the email address that should receive the sign-in link.');
+    if (C.gateBusy) return;
+    C.gateBusy = true; say('Sending the sign-in link…');
+    if (!(await C.connect())) { C.gateBusy = false; return say(C.err || 'Supabase could not be reached.'); }
+    try {
+      const back = location.origin + location.pathname;
+      const { error } = await C.sb.auth.signInWithOtp({ email, options: { emailRedirectTo: back, shouldCreateUser: true } });
+      if (error) throw error;
+      C.linkSent = true; C.gateBusy = false;
+      say('Check ' + email + ' and open the sign-in link in this browser. If the email shows a code instead, type it below.');
+    } catch (err) {
+      C.gateBusy = false;
+      const m = String(err && err.message || '');
+      say(/signups? not allowed|signup_disabled|user not found/i.test(m)
+        ? 'Supabase did not create a sign-in for that address. In the dashboard open Authentication, Users, add this email, turn on Auto Confirm, then ask for the link again.'
+        : C.sayAuth(err));
+    }
+    return;
+  }
+  if (act === 'code') {
+    const email = String(C.linkEmail || '').trim().toLowerCase();
+    const code = ($('#gate-code') && $('#gate-code').value || '').trim();
+    if (!email || !code) return say('Type the code from the email.');
+    if (C.gateBusy) return;
+    C.gateBusy = true; say('Checking the code…');
+    if (!(await C.connect())) { C.gateBusy = false; return say(C.err || 'Supabase could not be reached.'); }
+    try {
+      const { data, error } = await C.sb.auth.verifyOtp({ email, token: code, type: 'email' });
+      if (error) throw error;
+      C.gateBusy = false; C.gateMsg = ''; C.authed(data && data.session);
+    } catch (err) {
+      C.gateBusy = false;
+      say(/invalid|expired|otp/i.test(String(err && err.message || '')) ? 'That code is wrong or has expired. Ask for a new link.' : C.sayAuth(err));
+    }
+    return;
+  }
   if (act === 'signout') { await signOutAll(); return say(''); }
 }
 $('#gate').addEventListener('click', e => { const b = e.target.closest('button[data-gate]'); if (b && !b.disabled) gateAct(b.dataset.gate); });
 $('#gate').addEventListener('keydown', e => {
   if (e.key !== 'Enter') return;
-  const act = { 'gate-user': 'signin', 'gate-pass': 'signin' }[e.target.id];
+  const act = { 'gate-user': 'signin', 'gate-pass': 'signin', 'gate-email': 'email', 'gate-code': 'code' }[e.target.id];
   if (act) { e.preventDefault(); gateAct(act); }
 });
 
@@ -4779,7 +4871,7 @@ function staffBoxHtml() {
   return '<div>' + rows + '</div>' +
     '<div class="row"><input id="staff-user" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Username" aria-label="Username to add"><input id="staff-pass" type="password" autocomplete="new-password" placeholder="Password" aria-label="Password for the new person"><select id="staff-newrole" aria-label="Role for the new person">' + opt('staff') + '</select>' +
     '<button class="btn small primary" type="button" data-set="staff-add"' + (Staff.loading ? ' disabled' : '') + '>Add</button></div>' +
-    '<p class="note">Staff can view the library and add invoices. Admins can also change and delete records and manage this list. A new person signs in with the username and password you set here.</p>' +
+    '<p class="note">Staff can view the library and add invoices. Admins can also change and delete records and manage this list. A new person signs in with the username and password you set here. The last admin sign-in cannot be removed, and Delete everything does not remove staff.</p>' +
     (Staff.msg ? '<p class="note" aria-live="polite">' + esc(hideKey(Staff.msg)) + '</p>' : '');
 }
 function renderStaff() { const b = $('#staff-box'); if (b) b.innerHTML = staffBoxHtml(); }
@@ -4801,6 +4893,10 @@ function staffAct(act, b) {
   }
   if (act === 'staff-rm') {
     const email = b.dataset.email;
+    const list = Staff.list || [], target = list.find(s => s.email === email), admins = list.filter(s => s.role === 'admin').length;
+    if (list.length <= 1 || (target && target.role === 'admin' && admins <= 1)) {
+      Staff.armed = ''; Staff.msg = 'That is the last sign-in. It stays so the kitchen can still be opened.'; renderStaff(); return;
+    }
     if (Staff.armed !== email) { Staff.armed = email; renderStaff(); clearTimeout(staffAct.t); staffAct.t = setTimeout(() => { Staff.armed = ''; renderStaff(); }, 4000); return; }
     clearTimeout(staffAct.t); staffCall({ op: 'remove', email }, email + ' was removed.');
   }
@@ -4938,7 +5034,7 @@ function adminPlan(kind, which) {
     }));
     plan.detail = 'Delete everything stored for this kitchen: ' + noun(invs.length, 'invoice') + ' and their ' + noun(countLines(invs), 'line item')
       + ', ' + noun(idx.list.length, 'supplier') + ', all contacts, all price history, ' + noun(tpls.length, 'saved layout')
-      + ', and every logo in the supplier-logos bucket. Ignored and hidden items go too. Staff accounts and folder settings stay.';
+      + ', and every logo in the supplier-logos bucket. Ignored and hidden items go too. Staff sign-ins stay, including the last admin, and folder settings stay.';
     return plan;
   }
   return fail('Choose what to delete.');
@@ -4980,6 +5076,7 @@ async function adminLogoPaths(plan) {
   return [...new Set(paths)];
 }
 async function adminRun(plan) {
+  // Invoices, layouts and logos only. Staff rows and sign-in accounts are not part of any delete.
   const now = nowIso(), idOf = supplierIdFn();
   if (plan.dropInv.length || (plan.touchInv && plan.touchInv.length) || plan.clearFlags) {
     const drop = new Set(plan.dropInv), touch = new Set(plan.touchInv || []);
@@ -5098,7 +5195,13 @@ $('#settings').addEventListener('change', e => {
     else AdminDel.which = t.value;
     AdminDel.step = ''; AdminDel.msg = ''; renderAdminDel(); return;
   }
-  if (t.dataset.staffRole) { const email = t.dataset.staffRole; staffCall({ op: 'role', email, role: t.value }, email + ' is now ' + (t.value === 'admin' ? 'an admin' : 'staff') + '.'); return; }
+  if (t.dataset.staffRole) {
+    const email = t.dataset.staffRole, list = Staff.list || [], target = list.find(s => s.email === email), admins = list.filter(s => s.role === 'admin').length;
+    if (target && target.role === 'admin' && t.value !== 'admin' && admins <= 1) {
+      Staff.msg = 'The kitchen needs this admin. It stays so you can still sign in.'; renderStaff(); return;
+    }
+    staffCall({ op: 'role', email, role: t.value }, email + ' is now ' + (t.value === 'admin' ? 'an admin' : 'staff') + '.'); return;
+  }
   if (t.id === 'sb-url') {
     const v = t.value.trim().replace(/\/+$/, '');
     if (!/^https:\/\/[\w.\-]+(:\d+)?$/.test(v)) { t.value = Cloud.url; renderSb('The project URL looks like https://your-project.supabase.co'); return; }
@@ -5197,7 +5300,7 @@ async function initCaps() {
   try { const d = await loadSample(); S.docs.push(d); S.cur = 0; await analyse(d); await showPage(); fit(); } catch (e) {}
   renderAll();
 })();
-if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) window.__scraper = { S, Engine, Library, Lib, Gem, Files, addFiles, run, renderAll, flushSync, geminiScan, inkTurn, rotCanvas, flushAutoTpl, flushFileSave, fileTo, toast, hideKey, Cloud, Store, Logos, GEM_MODEL, logoTag };
+if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) window.__scraper = { S, Engine, Library, Lib, Gem, Files, addFiles, run, renderAll, flushSync, geminiScan, inkTurn, rotCanvas, flushAutoTpl, flushFileSave, fileTo, toast, hideKey, Cloud, Store, Logos, GEM_MODEL, logoTag, Staff };
 })();
 </script>
 </body>

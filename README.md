@@ -14,6 +14,7 @@ The page connects with the project's anon key, then asks for a **username and pa
 - Signed-in people see the same library and can add invoices. The admin can also change and delete records, and add or remove usernames under Settings → Staff.
 - Settings → Admin deletes one kind of data at a time (one invoice and its lines, all invoices, line items, one supplier and its invoices, lines, layout and logo, all suppliers, contacts, price history, one or all layouts, one or all logos, or everything). The confirm step names what will be removed. A delete is written here and in Supabase, and the next sync does not bring it back.
 - Optional `ADMIN_EMAILS` (comma-separated sign-in emails) is read like the Supabase URL: repository variable on Pages, or `.env` locally, then `node scripts/make-config.mjs`. The Admin username’s sign-in email is `admin@users.invoice.local`. If the variable is empty, every staff account with the admin role can delete. The address is not written into the page by hand.
+- If the admin username is gone, the sign-in page can email a magic link. Run the `claim_kitchen_admin` block at the end of `supabase-schema.sql` once. The next person to open that link becomes the admin when no admin row remains, or only an address in `ADMIN_EMAILS` when that list is set. Settings → Staff will not remove the last sign-in, and Delete everything does not remove staff.
 
 ## Keys
 
