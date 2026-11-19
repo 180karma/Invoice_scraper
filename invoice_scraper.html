@@ -2240,6 +2240,18 @@ function knownIssuerName(abn) {
   if (tpl) return String(tpl.name).trim();
   return invs.length ? String(invs[0].supplier).trim() : '';
 }
+// A layout may be applied only to an invoice from that same supplier.
+function sameLayoutSupplier(doc, tpl) {
+  if (!doc || !tpl || !doc.result) return false;
+  const f = doc.result.fields || {};
+  const dabn = String(f.abn && f.abn.value || '').replace(/\D/g, '');
+  const tabn = String(tpl.abn || '').replace(/\D/g, '');
+  if (dabn.length === 11 && tabn.length === 11) return dabn === tabn;
+  if ((dabn.length === 11) !== (tabn.length === 11)) return false;
+  const dn = Engine.norm(preferredSupplierName(f.supplier && f.supplier.value, dabn));
+  const tn = Engine.norm(preferredSupplierName(tpl.name, tabn));
+  return !!(dn && tn && dn === tn);
+}
 // Show and store the legal name when the saved text is only a care-of line or a branch label.
 function preferredSupplierName(name, abn) {
   const cur = String(name || '').trim();
@@ -2970,7 +2982,7 @@ function renderSuppliers() {
     h += '<div class="tpl' + (on ? ' on' : '') + '">' + (mark || '<span class="noimg">NO LOGO</span>') +
       '<div class="t">' + supNameBtn(label, sid, 'tplname') + '<span>' + (t.abn ? 'ABN ' + esc(fmtAbn(t.abn)) + ' · ' : '') + t.zones.length + ' box' + (t.zones.length === 1 ? '' : 'es') + (t.auto ? ' · saved automatically' : '') + (on ? ' · in use' : '') + '</span>' +
       (contactLinks(t, true).length ? '<div class="contacts">' + contactLinks(t, true).join('') + '</div>' : '') + '</div>' +
-      (doc && !on ? '<button class="btn small" type="button" data-apply="' + esc(t.id) + '">Apply</button>' : '') +
+      (doc && !on && sameLayoutSupplier(doc, t) ? '<button class="btn small" type="button" data-apply="' + esc(t.id) + '">Apply</button>' : '') +
       (Cloud.limited() ? '' : '<button class="iconbtn" type="button" data-del="' + esc(t.id) + '" aria-label="Delete the layout for ' + esc(label) + '">' + IC.bin.replace('<svg', '<svg width="18" height="18"') + '</button>') + '</div>';
   }
   if (S.templates.length) h += '<p class="note">' + (Store.where === 'page' ? 'Layouts are stored with this page, so they are there on your other devices too.' : 'Layouts are stored in this browser only.') + '</p>';
@@ -3021,7 +3033,7 @@ $('#panel').addEventListener('click', async e => {
   if (!doc) return;
   if (b.dataset.row != null) { showRow(+b.dataset.row); return; }
   if (b.dataset.restore != null) { const s = doc.result.skipped[+b.dataset.restore]; if (s) { if (s.ai != null) delete doc.aiMap[s.ai]; else { const z = doc.zones.find(o => o.id === s.zoneId); if (z && z.map) delete z.map[s.srcIndex]; changed(doc, null); } run(doc); renderAll(); } return; }
-  if (b.dataset.apply) { const t = S.templates.find(x => x.id === b.dataset.apply); if (t) { applyTemplate(doc, t, ['your choice']); doc.mode = 'text'; run(doc); S.sel = null; renderAll(); } return; }
+  if (b.dataset.apply) { const t = S.templates.find(x => x.id === b.dataset.apply); if (t && sameLayoutSupplier(doc, t)) { applyTemplate(doc, t, ['your choice']); doc.mode = 'text'; run(doc); S.sel = null; renderAll(); } else if (t) toast('That layout belongs to another supplier.', 'bad'); return; }
   switch (b.dataset.act) {
     case 'save-tpl': await saveTemplate(); break;
     case 'redetect': autoZones(doc); doc.mode = 'text'; S.sel = null; run(doc); renderAll(); break;
