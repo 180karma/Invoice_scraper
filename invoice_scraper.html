@@ -195,11 +195,6 @@ details.csvx > summary { cursor: pointer; font: 600 13px/1.3 var(--font-display)
 details.csvx[open] > summary { margin-bottom: 8px; }
 details.csvx .row { margin-top: 8px; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.libmenu { position: relative; display: inline-block; }
-.libmenu > summary { list-style: none; cursor: pointer; }
-.libmenu > summary::-webkit-details-marker { display: none; }
-.libmenu .menu { position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 4; min-width: 200px; display: flex; flex-direction: column; gap: 4px; padding: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, .16); }
-.libmenu .menu .btn { justify-content: flex-start; }
 .infotip { position: relative; margin-left: auto; }
 .infotip > summary { list-style: none; cursor: pointer; }
 .infotip > summary::-webkit-details-marker { display: none; }
@@ -3516,12 +3511,11 @@ function renderLibrary() {
   const box = $('#lib-body'), keep = (renderLibrary._v === L.view && renderLibrary._q === L.q) ? { x: box.scrollLeft, y: box.scrollTop } : { x: 0, y: 0 };
   box.innerHTML = h; box.scrollLeft = keep.x; box.scrollTop = keep.y; renderLibrary._v = L.view; renderLibrary._q = L.q;
   const off = a.invoices.length ? '' : ' disabled';
-  const menuWas = $('#lib-foot details.libmenu');
-  $('#lib-foot').innerHTML = '<details class="libmenu"' + (L.armed || (menuWas && menuWas.open) ? ' open' : '') + '><summary class="btn small">Library</summary><div class="menu">' +
-    '<button class="btn small" type="button" data-act="lib-backup"' + off + ' title="Saves the library file, plus the items CSV and the records CSV">Back up</button>' +
+  $('#lib-foot').innerHTML = '<div class="row">' +
+    '<button class="btn small" type="button" data-act="lib-backup"' + off + ' title="Downloads the library file, plus the items CSV and the records CSV">Download data</button>' +
     '<button class="btn small" type="button" data-act="lib-restore">Restore</button>' +
-    (Cloud.limited() ? '' : '<button class="btn small danger" type="button" data-act="lib-clear"' + off + '>' + (L.armed ? 'Tap again to delete everything' : 'Clear library') + '</button>') +
-    '</div></details>' +
+    (Cloud.isAdmin() ? '<button class="btn small danger" type="button" data-act="lib-clear"' + off + '>' + (L.armed ? 'Tap again to delete everything' : 'Clear library') + '</button>' : '') +
+    '</div>' +
     (a.hidden ? '<p class="note">' + a.hidden + ' item' + pl(a.hidden) + ' hidden.' + (Cloud.limited() ? '' : ' <button class="link" type="button" data-act="lib-unhide">Show ' + (a.hidden === 1 ? 'it' : 'them') + ' again</button>') + '</p>' : '') +
     (a.ignored ? '<p class="note">' + a.ignored + ' item' + pl(a.ignored) + ' ignored on new invoices. <button class="link" type="button" data-act="lib-unignore">Scan ' + (a.ignored === 1 ? 'it' : 'them') + ' again</button></p>' : '') +
     (Cloud.ready() ? '<p class="note">The library lives in this browser and is copied to Supabase (signed in as ' + esc((Cloud.user && Cloud.user.name) || 'this account') + '). Everyone signed in sees the same invoices and items.</p>'
@@ -3585,7 +3579,7 @@ function libAct(act) {
             const a = document.createElement('a'); a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove();
             setTimeout(() => URL.revokeObjectURL(u), 4000);
           }
-          toast('Backup saved, with the items CSV and the records CSV.');
+          toast('Data downloaded, with the items CSV and the records CSV.');
         } catch (e) { toast('The backup could not be saved here.', 'bad'); }
         return true;
       }
@@ -3594,7 +3588,7 @@ function libAct(act) {
     }
     case 'lib-restore': { const f = $('#libFile'); if (f) f.click(); return true; }
     case 'lib-clear':
-      if (adminOnly()) return true;
+      if (!Cloud.isAdmin()) { toast('Only an admin can clear the library.', 'bad'); return true; }
       if (!S.lib.armed) { S.lib.armed = true; renderLibrary(); clearTimeout(libAct.t); libAct.t = setTimeout(() => { S.lib.armed = false; if (S.tab === 'library') renderLibrary(); }, 4000); return true; }
       clearTimeout(libAct.t); S.lib.armed = false; S.lib.open = null;
       Lib.mutate(st => { st.invoices = {}; st.hidden = {}; st.ignored = {}; });
