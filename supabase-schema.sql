@@ -384,9 +384,11 @@ create policy "admin delete supplier logos" on storage.objects
   for delete to authenticated
   using (bucket_id = 'supplier-logos' and (select private.is_admin()));
 
--- Locked out: paste this block into the SQL editor and run it. Safe to re-run.
--- When no admin row remains, the signed-in page calls claim_kitchen_admin().
--- The email is taken from that sign-in. Nothing here names an address or a password.
+-- Locked out: paste this block into the SQL editor and run it again. Safe to re-run.
+-- A real inbox becomes admin when no admin remains, or when the only admins are
+-- @users.invoice.local usernames (those addresses cannot receive a magic link).
+-- The email is taken from the sign-in. Nothing here names a mailbox or a password.
+grant usage on schema private to authenticated;
 create or replace function private.claim_kitchen_admin()
 returns text
 language plpgsql
@@ -396,19 +398,20 @@ as $$
 declare
   em text := lower(btrim(coalesce((select auth.jwt()) ->> 'email', '')));
   current_role text;
-  admins int;
+  reachable int;
 begin
   if em = '' or position('@' in em) < 2 then
     raise exception 'Sign in first.';
   end if;
   perform pg_catalog.pg_advisory_xact_lock(814213);
-  select count(*) into admins from public.staff s where s.role = 'admin';
   select s.role into current_role from public.staff s where s.email = em;
   if current_role = 'admin' then
     return 'admin';
   end if;
-  if admins > 0 then
-    raise exception 'An admin already exists. Ask them to add you.';
+  select count(*) into reachable from public.staff s
+    where s.role = 'admin' and s.email not like '%@users.invoice.local';
+  if reachable > 0 then
+    raise exception 'An admin already exists. Sign in with that email. admin@users.invoice.local cannot receive mail.';
   end if;
   if current_role is not null then
     update public.staff set role = 'admin' where email = em;

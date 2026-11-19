@@ -4021,7 +4021,9 @@ function sbSafe(v) {
   if (v && typeof v === 'object') { const o = {}; for (const [k, x] of Object.entries(v)) o[sbSafe(k)] = sbSafe(x); return o; }
   return v;
 }
-const sbHashErr = h => { try { return new URLSearchParams(String(h || '').replace(/^#/, '')).get('error_description') || ''; } catch (e) { return ''; } };
+const sbHashErr = h => { try { const q = new URLSearchParams(String(h || '').replace(/^[?#]/, '')); return q.get('error_description') || q.get('error') || ''; } catch (e) { return ''; } };
+const sbLinkErr = () => sbHashErr(location.hash) || sbHashErr(location.search);
+const SIGN_IN_SITE = 'https://180karma.github.io/Invoice_scraper/';
 // Supabase accounts are email-shaped. A username becomes name@users.invoice.local, which is never sent an email.
 const USER_MAIL = 'users.invoice.local';
 function userMail(name) {
@@ -4083,9 +4085,28 @@ const Cloud = {
     if (!list.length || list.includes(email)) return true;
     return !email.endsWith('@' + USER_MAIL) && list.every(e => String(e).endsWith('@' + USER_MAIL));
   },
+  signInReturnUrl() {
+    return location.hostname === '180karma.github.io' ? SIGN_IN_SITE : location.origin + location.pathname;
+  },
+  // The Supabase sentence stays at the end so a refused sign-in can be read back.
+  plainAuth(e) {
+    const msg = String((e && (e.message || e.error_description || e.msg)) || e || '').trim();
+    const code = String((e && (e.code || e.error_code)) || '');
+    const both = msg + ' ' + code;
+    let plain = 'Supabase refused the sign-in.';
+    if (/redirect|redirect_to|invalid.*url|url.*not allowed/i.test(both)) plain = 'Supabase refused the return address for the sign-in link. In Authentication, URL Configuration, set Site URL to ' + SIGN_IN_SITE + ' and add ' + SIGN_IN_SITE + '** under Redirect URLs.';
+    else if (/signups? not allowed|signup_disabled|otp_disabled/i.test(both)) plain = 'Supabase will not create a sign-in for a new address. Under Authentication, Sign In / Providers, Email, turn on Allow new users to sign up. Or add this email under Authentication, Users, and turn on Auto Confirm.';
+    else if (/email.*(provider|logins?).*disabled|email_provider_disabled/i.test(both)) plain = 'Email sign-in is turned off. Under Authentication, Sign In / Providers, turn on Email.';
+    else if (/email rate limit|over_email_send_rate_limit|too many|after \d+ seconds/i.test(both)) plain = 'Supabase is limiting sign-in emails. Wait a minute and try again.';
+    else if (/claim_kitchen_admin|could not find the function/i.test(both)) plain = 'The restore step is not in Supabase yet. In the SQL editor, run the block at the end of supabase-schema.sql that starts with claim_kitchen_admin, then choose Check again.';
+    else if (/an admin already exists/i.test(both)) plain = 'A staff admin row is still there, so this email was not made the admin. Sign in with that existing admin email. admin@users.invoice.local cannot receive mail. If the only leftover admin is that username, run the claim_kitchen_admin block at the end of supabase-schema.sql again, then use Email me a sign-in link with the inbox you read.';
+    else if (/expired|invalid|otp/i.test(both)) plain = 'That sign-in link or code is no longer valid. Ask for a new one and open it once in this browser.';
+    const said = msg ? ' Supabase said: ' + hideKey(msg).slice(0, 180) + (code ? ' (' + hideKey(code) + ')' : '') + '.' : '';
+    return plain + said;
+  },
   async claimAdmin() {
     const { data, error } = await this.sb.rpc('claim_kitchen_admin');
-    if (error) { this.claimErr = this.say(error); return null; }
+    if (error) { this.claimErr = this.plainAuth(error); return null; }
     return data === 'admin' || data === 'staff' ? data : null;
   },
   async loadRole() {
@@ -4256,14 +4277,14 @@ const Cloud = {
     if (this.sb) return Promise.resolve(true);
     if (this.connecting) return this.connecting;
     this.connecting = (async () => {
-      const linkErr = sbHashErr(location.hash);
+      const linkErr = sbLinkErr();
       try {
         const lib = await this.lib();
         const sb = this.sb = lib.createClient(this.url, this.key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit', storageKey: 'invoice-scraper.supabase-auth' } });
         // a client replaced by a new key or project URL must not sign the new one out
         sb.auth.onAuthStateChange((ev, session) => { setTimeout(() => { if (this.sb === sb) this.authed(session); }, 0); });
         const r = await sb.auth.getSession();
-        if (/access_token|error_description/.test(location.hash) || /#$/.test(location.href)) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }
+        if (/access_token|error_description|error=/.test(location.hash) || /[?&](code|error|error_description)=/.test(location.search) || /#$/.test(location.href)) { try { history.replaceState(null, '', location.pathname); } catch (e) {} }
         if (this.sb !== sb) return false;
         if (linkErr) this.linkFailed(linkErr);
         this.authed(r && r.data ? r.data.session : null);
@@ -4302,9 +4323,8 @@ const Cloud = {
     }, e => { this.fail(e); renderSb(); });
   },
   linkFailed(desc) {
-    const m = /expired|invalid/i.test(desc) ? 'That sign-in link has expired or was already used. Some email apps open links to check them, which uses them up. Send a new email and open the link once.'
-      : 'Supabase could not sign you in from that link: ' + hideKey(desc).slice(0, 160);
-    renderSb(m); toast(m, 'bad');
+    const m = this.plainAuth({ message: desc });
+    this.gateMsg = m; renderGate(true); toast(m, 'bad');
   },
   async disconnect() {
     clearTimeout(this.timer);
@@ -4332,15 +4352,7 @@ const Cloud = {
     return hideKey(m).slice(0, 200);
   },
   // why a sign-in email was not sent, in the words of the Supabase setting to change
-  sayAuth(e) {
-    const m = String((e && e.message) || '') + ' ' + String((e && e.code) || ''), secs = m.match(/after (\d+) seconds?/i);
-    if (secs) return 'Supabase needs a short wait between sign-in emails. Try again in ' + secs[1] + ' seconds.';
-    if (/email rate limit|over_email_send_rate_limit/i.test(m)) return 'Supabase has sent as many sign-in emails as its built-in sender allows this hour. Use the last email, try again later, or set up custom SMTP in Supabase (Authentication, Emails).';
-    if (/signups? not allowed|signup_disabled|otp_disabled|user not found/i.test(m)) return 'This email is not on the kitchen staff list. Ask an admin to add it under Settings, Staff.';
-    if (/email.*(provider|logins?).*disabled|email_provider_disabled/i.test(m)) return 'Email sign-in is turned off in Supabase. Turn on Email under Authentication, Sign In / Providers.';
-    if (/rate|too many/i.test(m)) return 'Supabase is limiting sign-in emails. Wait a minute and try again.';
-    return this.say(e);
-  },
+  sayAuth(e) { return this.plainAuth(e); },
   fail(e) {
     const off = this.isNetwork(e);
     this.tries = Math.min(this.tries + 1, 8);
@@ -4720,15 +4732,16 @@ async function signOutAll() {
 
 /* sign-in screen: with a Supabase key, the page opens only for people on the staff list */
 const CLAIM_SQL = [
+  'grant usage on schema private to authenticated;',
   'create or replace function private.claim_kitchen_admin() returns text language plpgsql security definer set search_path = \'\' as $$',
-  'declare em text := lower(btrim(coalesce((select auth.jwt()) ->> \'email\', \'\'))); current_role text; admins int;',
+  'declare em text := lower(btrim(coalesce((select auth.jwt()) ->> \'email\', \'\'))); current_role text; reachable int;',
   'begin',
   '  if em = \'\' or position(\'@\' in em) < 2 then raise exception \'Sign in first.\'; end if;',
   '  perform pg_catalog.pg_advisory_xact_lock(814213);',
-  '  select count(*) into admins from public.staff s where s.role = \'admin\';',
   '  select s.role into current_role from public.staff s where s.email = em;',
   '  if current_role = \'admin\' then return \'admin\'; end if;',
-  '  if admins > 0 then raise exception \'An admin already exists. Ask them to add you.\'; end if;',
+  '  select count(*) into reachable from public.staff s where s.role = \'admin\' and s.email not like \'%@users.invoice.local\';',
+  '  if reachable > 0 then raise exception \'An admin already exists. Sign in with that email. admin@users.invoice.local cannot receive mail.\'; end if;',
   '  if current_role is not null then update public.staff set role = \'admin\' where email = em;',
   '  else insert into public.staff (email, role) values (em, \'admin\'); end if;',
   '  return \'admin\';',
@@ -4754,7 +4767,7 @@ function gateHtml() {
     const allowed = C.mayClaimAdmin();
     let why;
     if (!allowed) why = '<p>Signed in as <b>' + who + '</b>. This address is not in ADMIN_EMAILS, so it cannot become the admin. Sign out and use an address from that list.</p>';
-    else if (C.claimErr) why = '<p>Signed in as <b>' + who + '</b>, and there is no admin row for this account.</p><p>' + esc(C.claimErr) + '</p>' + (/SQL editor/.test(C.claimErr) ? '<pre class="sql">' + esc(CLAIM_SQL) + '</pre>' : '');
+    else if (C.claimErr) why = '<p>Signed in as <b>' + who + '</b>.</p><p>' + esc(C.claimErr) + '</p>' + (/SQL editor/.test(C.claimErr) ? '<pre class="sql">' + esc(CLAIM_SQL) + '</pre>' : '');
     else why = '<p>Signed in as <b>' + who + '</b>. No admin remains, and this address can take that place.</p>';
     body = why + '<div class="row"><button class="btn primary" type="button" data-gate="retry">Check again</button><button class="btn" type="button" data-gate="signout">Sign out</button></div>';
   } else if (C.user) body = down
@@ -4793,7 +4806,7 @@ async function gateAct(act) {
       C.gateMsg = ''; C.authed(data && data.session);
     } catch (err) {
       const m = String(err && err.message || '');
-      say(/invalid|credentials|password/i.test(m) ? 'That username or password is wrong.' : C.say(err));
+      say(/invalid|credentials|password/i.test(m) ? 'That username or password is wrong. Supabase said: ' + hideKey(m).slice(0, 180) + '.' : C.plainAuth(err));
     }
     return;
   }
@@ -4815,17 +4828,14 @@ async function gateAct(act) {
     C.gateBusy = true; say('Sending the sign-in link…');
     if (!(await C.connect())) { C.gateBusy = false; return say(C.err || 'Supabase could not be reached.'); }
     try {
-      const back = location.origin + location.pathname;
+      const back = C.signInReturnUrl();
       const { error } = await C.sb.auth.signInWithOtp({ email, options: { emailRedirectTo: back, shouldCreateUser: true } });
       if (error) throw error;
       C.linkSent = true; C.gateBusy = false;
-      say('Check ' + email + ' and open the sign-in link in this browser. If the email shows a code instead, type it below.');
+      say('Check ' + email + ' and open the link in this browser. The link must return to ' + SIGN_IN_SITE + ' . If it opens localhost, set Supabase Site URL to that address and add ' + SIGN_IN_SITE + '** under Redirect URLs. If the email shows a code instead, type it below.');
     } catch (err) {
       C.gateBusy = false;
-      const m = String(err && err.message || '');
-      say(/signups? not allowed|signup_disabled|user not found/i.test(m)
-        ? 'Supabase did not create a sign-in for that address. In the dashboard open Authentication, Users, add this email, turn on Auto Confirm, then ask for the link again.'
-        : C.sayAuth(err));
+      say(C.plainAuth(err));
     }
     return;
   }
@@ -4842,7 +4852,7 @@ async function gateAct(act) {
       C.gateBusy = false; C.gateMsg = ''; C.authed(data && data.session);
     } catch (err) {
       C.gateBusy = false;
-      say(/invalid|expired|otp/i.test(String(err && err.message || '')) ? 'That code is wrong or has expired. Ask for a new link.' : C.sayAuth(err));
+      say(C.plainAuth(err));
     }
     return;
   }
@@ -5294,7 +5304,7 @@ async function initCaps() {
   Cloud.load(); renderSyncPill(); renderGate(); if (Cloud.key) Cloud.connect();
   // a sign-in link opened in a browser that has no key yet: the tokens stay in the address until the key is pasted
   else if (/access_token=/.test(location.hash)) { Cloud.msg = 'To finish signing in on this browser, paste the Supabase anon or publishable key here once.'; setMob('settings'); setTimeout(() => { const k = $('#sb-key'); if (k) k.focus(); }, 60); }
-  else if (sbHashErr(location.hash)) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }
+  else if (sbLinkErr()) { Cloud.gateMsg = Cloud.plainAuth({ message: sbLinkErr() }); try { history.replaceState(null, '', location.pathname); } catch (e) {} renderGate(true); }
   renderAll();
   initCaps();
   try { const d = await loadSample(); S.docs.push(d); S.cur = 0; await analyse(d); await showPage(); fit(); } catch (e) {}
