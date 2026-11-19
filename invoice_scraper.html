@@ -150,15 +150,15 @@ button { cursor: pointer; }
 .empty b { color: var(--ink); }
 
 .tablewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
-table.grid { border-collapse: collapse; width: 100%; font: 400 12.5px/1.35 var(--font-data); font-variant-numeric: tabular-nums; }
-.grid th { text-align: left; vertical-align: bottom; padding: 6px 6px 5px; border-bottom: 2px solid var(--ink); background: var(--surface); position: sticky; top: 0; }
-.grid th select { display: block; border: 0; -webkit-appearance: none; appearance: none; font: 600 13px/1.2 var(--font-display); letter-spacing: .07em; text-transform: uppercase; padding: 2px 12px 2px 0; width: var(--w, auto); max-width: 150px; cursor: pointer; border-radius: 0;
+table.grid { border-collapse: collapse; width: 100%; font: 400 11px/1.2 var(--font-data); font-variant-numeric: tabular-nums; }
+.grid th { text-align: left; vertical-align: bottom; padding: 4px 5px 3px; border-bottom: 2px solid var(--ink); background: var(--surface); position: sticky; top: 0; }
+.grid th select { display: block; border: 0; -webkit-appearance: none; appearance: none; font: 600 11px/1.15 var(--font-display); letter-spacing: .06em; text-transform: uppercase; padding: 1px 12px 1px 0; width: var(--w, auto); max-width: 9em; cursor: pointer; border-radius: 0;
   background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%237c8c86' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 1px center / 8px 5px; }
 .grid th select:hover { text-decoration: underline; text-underline-offset: 3px; }
 @supports (field-sizing: content) { .grid th select { width: auto; field-sizing: content; } }
-.grid th .orig { display: block; font: 400 11px/1.2 var(--font-body); color: var(--muted); white-space: nowrap; }
-.grid td { padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; white-space: nowrap; }
-.grid td.txt { white-space: normal; min-width: 170px; }
+.grid th .orig { display: block; font: 400 10px/1.1 var(--font-body); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 9em; }
+.grid td { padding: 2px 5px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
+.grid td.txt { overflow: hidden; text-overflow: ellipsis; max-width: 34vw; min-width: 0; }
 .grid td.num, .grid th.num { text-align: right; }
 .grid th.num select { margin-left: auto; text-align: right; }
 .grid th.num .orig { text-align: right; }
@@ -166,7 +166,7 @@ table.grid { border-collapse: collapse; width: 100%; font: 400 12.5px/1.35 var(-
 .grid td.edited { box-shadow: inset 3px 0 0 var(--warn); }
 .grid tr:last-child td { border-bottom: 0; }
 .grid td.rn { padding: 0; width: 1%; }
-.grid td.rn button { border: 0; background: none; color: var(--muted); padding: 6px 8px; font: inherit; width: 100%; text-align: right; }
+.grid td.rn button { border: 0; background: none; color: var(--muted); padding: 1px 6px; font: inherit; width: 100%; text-align: right; }
 .grid td.rn button:hover { color: var(--accent); background: var(--wash); }
 .libsheet tr.off td { opacity: .55; }
 .libsheet .offmark { font: 600 11px var(--font-display); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-left: 6px; }
@@ -389,7 +389,7 @@ a.contact:hover { background: var(--wash); text-decoration: underline; text-unde
   .wide { display: none; }
   .bar { padding: 8px 12px; gap: 6px; }
   .brand { font-size: 15px; padding: 4px 7px; letter-spacing: .04em; }
-  .grid td.txt { min-width: 150px; }
+  .grid td.txt { max-width: 46vw; }
   .btn { padding: 0 10px; }
   .pane { padding: 10px 12px 20px; }
   .status { padding: 8px 12px; }
@@ -474,7 +474,8 @@ a.contact:hover { background: var(--wash); text-decoration: underline; text-unde
   .supfacts div { padding: 4px 6px; }
   .supfacts b { font-size: 14px; }
   .contacts.big .contact { min-height: 40px; font-size: 13px; }
-  input, select, textarea, [contenteditable="true"], .fld input, #lib-q, .grid th select, .grp select, .grp input[type="text"] { font-size: 16px; }
+  input, select, textarea, .fld input, #lib-q, .grp select, .grp input[type="text"] { font-size: 16px; }
+  .grid td, .grid th select, .grid th .orig, .grid td.rn button { font-size: 11px; }
   .grp select, .grp input[type="text"] { height: 40px; }
   .pane, #lib-body, .tablewrap, .suplist { overflow-x: auto; }
   .grid td.rn { position: sticky; left: 0; z-index: 2; background: var(--surface); }
@@ -2922,7 +2923,7 @@ function renderItems() {
   h += '</tr></thead><tbody>';
   r.rows.forEach((row, i) => {
     h += '<tr><td class="rn"><button type="button" data-row="' + i + '" aria-label="Show row ' + (i + 1) + ' on the page" title="Show on the page">' + (i + 1) + '</button></td>';
-    row.cells.forEach((v, j) => { h += '<td contenteditable="true" spellcheck="false" data-i="' + i + '" data-j="' + j + '" class="' + (numeric[j] ? 'num' : (r.columns[j].key === 'description' ? 'txt' : '')) + (r.edited[i + '|' + j] ? ' edited' : '') + '">' + esc(v) + '</td>'; });
+    row.cells.forEach((v, j) => { const txt = r.columns[j].key === 'description'; h += '<td contenteditable="true" spellcheck="false" data-i="' + i + '" data-j="' + j + '" class="' + (numeric[j] ? 'num' : (txt ? 'txt' : '')) + (r.edited[i + '|' + j] ? ' edited' : '') + '"' + (txt && v ? ' title="' + esc(v) + '"' : '') + '>' + esc(v) + '</td>'; });
     h += '</tr>';
   });
   h += '</tbody></table></div><div class="under">';
