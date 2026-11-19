@@ -136,11 +136,12 @@ button { cursor: pointer; }
 .pill.warn { background: var(--warn-bg); color: var(--warn); } .pill.warn::before { background: var(--warn); border-radius: 1px; transform: rotate(45deg); }
 .pill.bad { background: var(--bad-bg); color: var(--bad); } .pill.bad::before { background: var(--bad); border-radius: 1px; }
 .pill .link { color: inherit; font-weight: 600; }
-.tabs { flex: none; display: flex; align-items: stretch; gap: 2px; padding: 0 0 0 10px; background: var(--surface); border-bottom: 1px solid var(--line); overflow-x: auto; }
+.tabs { flex: none; display: flex; align-items: stretch; gap: 2px; padding: 0 0 0 10px; background: var(--surface); border-bottom: 1px solid var(--line); overflow: visible; }
 .tabs [role="tab"] { border: 0; background: none; padding: 10px 8px 8px; font: 600 15px/1 var(--font-display); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); border-bottom: 3px solid transparent; white-space: nowrap; }
 .tabs [role="tab"][aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
 .tabs .n { font: 500 12px var(--font-data); background: var(--wash); border-radius: 999px; padding: 1px 6px; margin-left: 4px; letter-spacing: 0; }
-.tabs .sp { flex: 1; }
+.tabs .sp { flex: 1; display: flex; align-items: center; justify-content: flex-end; min-width: 0; }
+.tabs .infotip { margin-left: 0; }
 #splitBtn { position: sticky; right: 0; background: var(--surface); align-self: center; flex: none; border-radius: 0; height: 100%; min-height: 36px; }
 #copyTableBtn { align-self: center; flex: none; margin-right: 4px; }
 #copyTableBtn[aria-disabled="true"] { opacity: .5; }
@@ -528,7 +529,7 @@ a.contact:hover { background: var(--wash); text-decoration: underline; text-unde
         <button role="tab" type="button" id="tab-details" aria-controls="pane-details" aria-selected="false">Details</button>
         <button role="tab" type="button" id="tab-library" aria-controls="pane-library" aria-selected="false">Library<span class="n" id="n-lib">0</span></button>
         <button role="tab" type="button" id="tab-suppliers" aria-controls="pane-suppliers" aria-selected="false">Suppliers<span class="n" id="n-sup">0</span></button>
-        <span class="sp"></span>
+        <span class="sp"><details class="infotip"><summary class="iconbtn" aria-label="About saved layouts" title="About saved layouts"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 8h.01"/></svg></summary><div class="tip"><label class="chk" for="auto-tpl"><input type="checkbox" id="auto-tpl" checked>Save the layout of a new supplier automatically, and keep it updated when you move its boxes</label><p class="note">A saved layout remembers what each box sits next to, plus your column choices and the supplier’s phone and email. The next invoice with the same ABN, name or logo is scanned and its boxes are placed to fit: the table box follows however many lines there are.</p></div></details></span>
         <button class="btn small" type="button" id="copyTableBtn" data-act="copy-table" title="Copy the visible table for Excel">Copy</button>
         <button class="iconbtn" type="button" id="splitBtn" aria-label="Change panel height" title="Change panel height"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16M7 9l5-5 5 5M7 15l5 5 5-5"/></svg></button>
       </div>
@@ -2998,15 +2999,7 @@ function csvBox() {
 function renderSuppliers() {
   const doc = cur(), el = $('#pane-suppliers');
   $('#n-sup').textContent = S.templates.length;
-  const tipWas = el.querySelector('details.infotip');
-  const info = '<details class="infotip"' + (tipWas && tipWas.open ? ' open' : '') + '><summary class="iconbtn" aria-label="About saved layouts" title="About saved layouts"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 8h.01"/></svg></summary><div class="tip">' +
-    '<label class="chk" for="auto-tpl"><input type="checkbox" id="auto-tpl"' + (S.autoTpl ? ' checked' : '') + '>Save the layout of a new supplier automatically, and keep it updated when you move its boxes</label>' +
-    '<p class="note">A saved layout remembers what each box sits next to, plus your column choices and the supplier’s phone and email. The next invoice with the same ABN, name or logo is scanned and its boxes are placed to fit: the table box follows however many lines there are.</p></div></details>';
   let h = '';
-  if (doc) {
-    const f = doc.result.fields, name = f.supplier ? String(f.supplier.value) : 'this supplier';
-    h += '<div class="row"><button class="btn primary" type="button" data-act="save-tpl">' + (doc.tplId ? 'Update layout for ' : 'Save layout for ') + esc(name.length > 28 ? name.slice(0, 27) + '…' : name) + '</button><button class="btn" type="button" data-act="redetect">Reset boxes</button>' + info + '</div>';
-  } else h += '<div class="row">' + info + '</div>';
   if (!S.templates.length) h += '<p class="empty">No supplier layouts saved yet.</p>';
   for (const t of S.templates) {
     const on = doc && doc.tplId === t.id;
@@ -4712,7 +4705,7 @@ const Cloud = {
     } catch (e) { this.applying = false; this.fail(e); return false; }
   },
   applySettings(d) {
-    if (typeof d.autoLayout === 'boolean') { S.autoTpl = d.autoLayout; try { localStorage.setItem(AUTO_TPL_KEY, d.autoLayout ? '1' : '0'); } catch (e) {} }
+    if (typeof d.autoLayout === 'boolean') { S.autoTpl = d.autoLayout; try { localStorage.setItem(AUTO_TPL_KEY, d.autoLayout ? '1' : '0'); } catch (e) {} const box = $('#auto-tpl'); if (box) box.checked = d.autoLayout; }
     if (typeof d.folderAuto === 'boolean') Files.auto = d.folderAuto;
     if (typeof d.folderSub === 'boolean') Files.sub = d.folderSub;
     Files.save();
@@ -5397,6 +5390,7 @@ async function initCaps() {
 (async function start() {
   S.templates = Store.loadLocal(); Lib.load(); Gem.load();
   try { S.autoTpl = localStorage.getItem(AUTO_TPL_KEY) !== '0'; } catch (e) { S.autoTpl = true; }
+  const autoBox = $('#auto-tpl'); if (autoBox) autoBox.checked = S.autoTpl;
   restoreMob(); applyMob(); markNav();
   Files.load().then(() => { renderStatus(); if (S.tab === 'details') renderDetails(); });
   Cloud.load(); renderSyncPill(); renderGate(); if (Cloud.key) Cloud.connect();
