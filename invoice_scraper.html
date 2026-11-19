@@ -2214,16 +2214,38 @@ async function analyse(doc) {
 function recheckDocs() {
   for (const d of S.docs) { if (d.tplId || d.touched || !d.fp) continue; const hit = matchTemplate(d); if (hit) { applyTemplate(d, hit.tpl, hit.why); run(d); } }
 }
-// the name already on file for this ABN: the saved layout, or the earliest invoice that is not a care-of line
+// A legal name (Pty Ltd, P/L, Limited) is the issuer. "Head office" and a care-of line are not.
+function issuerLegal(name) { return /\b(?:pty\.?\s*ltd\.?|p\/l|limited)\b/i.test(String(name || '')); }
 function knownIssuerName(abn) {
   const a = String(abn || '').replace(/\D/g, '');
   if (a.length !== 11) return '';
   const ok = s => s && String(s).trim() && !Engine.isCareOf(s);
-  const tpl = S.templates.find(t => String(t.abn || '').replace(/\D/g, '') === a && ok(t.name));
-  if (tpl) return String(tpl.name).trim();
+  const names = [];
+  for (const t of S.templates) if (String(t.abn || '').replace(/\D/g, '') === a && ok(t.name)) names.push(String(t.name).trim());
   const invs = Object.values((Lib.store && Lib.store.invoices) || {}).filter(i => String(i.abn || '').replace(/\D/g, '') === a && ok(i.supplier));
   invs.sort((p, q) => supplierWhen(p).localeCompare(supplierWhen(q)) || String(p.added || '').localeCompare(String(q.added || '')));
+  for (const i of invs) names.push(String(i.supplier).trim());
+  const legal = names.filter(issuerLegal);
+  if (legal.length) {
+    const count = {};
+    for (const s of legal) { const k = Engine.norm(s); count[k] = (count[k] || 0) + 1; }
+    let best = legal[0];
+    for (const s of legal) {
+      const better = count[Engine.norm(s)] > count[Engine.norm(best)] || (count[Engine.norm(s)] === count[Engine.norm(best)] && s.length > best.length);
+      if (better) best = s;
+    }
+    return best;
+  }
+  const tpl = S.templates.find(t => String(t.abn || '').replace(/\D/g, '') === a && ok(t.name));
+  if (tpl) return String(tpl.name).trim();
   return invs.length ? String(invs[0].supplier).trim() : '';
+}
+// Show and store the legal name when the saved text is only a care-of line or a branch label.
+function preferredSupplierName(name, abn) {
+  const cur = String(name || '').trim();
+  const known = knownIssuerName(abn);
+  if (known && (!cur || Engine.isCareOf(cur) || (issuerLegal(known) && !issuerLegal(cur)))) return known;
+  return cur;
 }
 // a care-of line is never the supplier. An ABN already in the library keeps that supplier's name,
 // so a HOST invoice is not renamed from a "c/- Pearl Coast" line, and Pearl Coast is left as Pearl Coast.
@@ -2698,8 +2720,9 @@ function renderSupplier() {
     const f = doc.result.fields || {}, nm = f.supplier && f.supplier.value != null ? String(f.supplier.value) : '';
     if (nm.trim() && idOf(nm, f.abn && f.abn.value) === id) docMatch = !doc.lib || !mine.some(i => i.key === doc.libKey);
   }
-  const name = (mine.find(i => i.supplier) || {}).supplier || (tpls.find(t => t.name) || {}).name || (id === 'unknown' ? 'Unknown supplier' : id);
-  const abn = (mine.find(i => i.abn) || {}).abn || (tpls.find(t => t.abn) || {}).abn || '';
+  const abn = (mine.find(i => i.abn) || {}).abn || (tpls.find(t => t.abn) || {}).abn || (/^\d{11}$/.test(id) ? id : '');
+  const rawName = (mine.find(i => i.supplier) || {}).supplier || (tpls.find(t => t.name) || {}).name || '';
+  const name = preferredSupplierName(rawName, abn) || (id === 'unknown' ? 'Unknown supplier' : rawName || id);
   const phones = [], emails = [], sites = [];
   collectContacts(mine.map(i => i.phone).concat(tpls.map(t => t.phone)), { out: phones, key: v => Engine.phoneKey(v) });
   collectContacts(mine.map(i => i.email).concat(tpls.map(t => t.email)), { out: emails, key: v => Engine.isEmail(v) ? v.trim().toLowerCase() : '' });
@@ -2942,12 +2965,13 @@ function renderSuppliers() {
   for (const t of S.templates) {
     const on = doc && doc.tplId === t.id;
     const sid = supplierIdFn()(t.name, t.abn);
+    const label = preferredSupplierName(t.name, t.abn);
     const mark = logoTag(sid, t.logo && t.logo.thumb, '');
     h += '<div class="tpl' + (on ? ' on' : '') + '">' + (mark || '<span class="noimg">NO LOGO</span>') +
-      '<div class="t">' + supNameBtn(t.name, sid, 'tplname') + '<span>' + (t.abn ? 'ABN ' + esc(fmtAbn(t.abn)) + ' · ' : '') + t.zones.length + ' box' + (t.zones.length === 1 ? '' : 'es') + (t.auto ? ' · saved automatically' : '') + (on ? ' · in use' : '') + '</span>' +
+      '<div class="t">' + supNameBtn(label, sid, 'tplname') + '<span>' + (t.abn ? 'ABN ' + esc(fmtAbn(t.abn)) + ' · ' : '') + t.zones.length + ' box' + (t.zones.length === 1 ? '' : 'es') + (t.auto ? ' · saved automatically' : '') + (on ? ' · in use' : '') + '</span>' +
       (contactLinks(t, true).length ? '<div class="contacts">' + contactLinks(t, true).join('') + '</div>' : '') + '</div>' +
       (doc && !on ? '<button class="btn small" type="button" data-apply="' + esc(t.id) + '">Apply</button>' : '') +
-      (Cloud.limited() ? '' : '<button class="iconbtn" type="button" data-del="' + esc(t.id) + '" aria-label="Delete the layout for ' + esc(t.name) + '">' + IC.bin.replace('<svg', '<svg width="18" height="18"') + '</button>') + '</div>';
+      (Cloud.limited() ? '' : '<button class="iconbtn" type="button" data-del="' + esc(t.id) + '" aria-label="Delete the layout for ' + esc(label) + '">' + IC.bin.replace('<svg', '<svg width="18" height="18"') + '</button>') + '</div>';
   }
   if (S.templates.length) h += '<p class="note">' + (Store.where === 'page' ? 'Layouts are stored with this page, so they are there on your other devices too.' : 'Layouts are stored in this browser only.') + '</p>';
   el.innerHTML = h;
@@ -3376,7 +3400,7 @@ function libItemRows(it, n, nCols) {
     '<td class="rn"><button type="button" class="sheet-exp" data-item="' + esc(it.key) + '" aria-expanded="' + open + '" title="' + (open ? 'Hide price history' : 'Show price history') + '">' + (open ? '▾ ' : '▸ ') + n + '</button></td>' +
     '<td>' + (it.item_no ? '<span class="code">' + esc(it.item_no) + '</span>' : '') + '</td>' +
     '<td class="clip" title="' + esc(it.description || '') + '">' + esc(it.description || 'No description') + '</td>' +
-    '<td class="clip" title="' + esc(it.supplier || '') + '">' + supNameBtn(it.supplier, itemSupId(it), 'suplink') + '</td>' +
+    '<td class="clip" title="' + esc(preferredSupplierName(it.supplier, itemSupId(it)) || '') + '">' + supNameBtn(preferredSupplierName(it.supplier, itemSupId(it)), itemSupId(it), 'suplink') + '</td>' +
     '<td class="num">' + esc(fmtQty(it.qty)) + '</td>' +
     '<td>' + esc(uom) + '</td>' +
     '<td class="num">' + (it.lastPrice != null ? priceHtml(it.lastPrice, it.lastUom || it.uom) : '') + '</td>' +
@@ -3394,7 +3418,7 @@ function libInvRows(i, n, nCols) {
   let h = '<tr class="' + (open ? 'open' : '') + '" data-inv="' + esc(i.key) + '">' +
     '<td class="rn"><button type="button" class="sheet-exp" data-inv="' + esc(i.key) + '" aria-expanded="' + open + '" title="' + (open ? 'Hide purchased items' : 'Show purchased items') + '">' + (open ? '▾ ' : '▸ ') + n + '</button></td>' +
     '<td>' + esc(niceDate(i.date || String(i.added).slice(0, 10))) + '</td>' +
-    '<td class="clip" title="' + esc(i.supplier || '') + '">' + supNameBtn(i.supplier, supplierIdFn()(i.supplier, i.abn), 'suplink') + '</td><td>' + esc(i.invoice_no || '') + '</td>' +
+    '<td class="clip" title="' + esc(preferredSupplierName(i.supplier, i.abn) || '') + '">' + supNameBtn(preferredSupplierName(i.supplier, i.abn), supplierIdFn()(i.supplier, i.abn), 'suplink') + '</td><td>' + esc(i.invoice_no || '') + '</td>' +
     '<td class="num">' + i.lines.length + '</td><td class="num">' + (i.total != null ? money(i.total) : '') + '</td><td>' + (i.src === 'gemini' ? 'Gemini' : i.src === 'claude' ? 'Claude' : 'Text') + '</td>' +
     '<td class="clip">' + Engine.splitList(i.phone).map(telLink).join(' ') + '</td><td class="clip">' + Engine.splitList(i.email).map(mailLink).join(' ') + '</td>' +
     '<td class="clip" title="' + esc(i.file || '') + '">' + esc(i.file || '') + '</td>' +
@@ -3446,7 +3470,7 @@ function renderLibrary() {
     libOrder(recs, 'records');
     const cell = (r, k) => { const v = r[k]; const inner = k === 'unit_price' ? priceHtml(v, r.uom) : esc(v == null ? '' : k === 'quantity' || k === 'weight' ? fmtQty(v) : num(k) && typeof v === 'number' ? v.toFixed(2) : v); return '<td class="' + (num(k) ? 'num' : k === 'description' ? 'clip' : '') + '"' + (k === 'description' && v ? ' title="' + esc(v) + '"' : '') + '>' + inner + '</td>'; };
     const idOf = supplierIdFn(), invBy = Lib.store.invoices || {};
-    h = recs.length ? '<table class="libsheet">' + libHead(cols, 'records') + '<tbody>' + recs.slice(0, L.limit).map((r, i) => '<tr><td class="rn">' + (i + 1) + '</td><td>' + esc(niceDate(r.date)) + '</td><td class="clip" title="' + esc(r.supplier || '') + '">' + supNameBtn(r.supplier, idOf(r.supplier, (invBy[r.inv] || {}).abn), 'suplink') + '</td><td>' + esc(r.invoice_no) + '</td>' + F.map(f => cell(r, f.key)).join('') + '</tr>').join('') + '</tbody></table>' + more(recs.length) : none;
+    h = recs.length ? '<table class="libsheet">' + libHead(cols, 'records') + '<tbody>' + recs.slice(0, L.limit).map((r, i) => { const sid = idOf(r.supplier, (invBy[r.inv] || {}).abn), who = preferredSupplierName(r.supplier, (invBy[r.inv] || {}).abn); return '<tr><td class="rn">' + (i + 1) + '</td><td>' + esc(niceDate(r.date)) + '</td><td class="clip" title="' + esc(who || '') + '">' + supNameBtn(who, sid, 'suplink') + '</td><td>' + esc(r.invoice_no) + '</td>' + F.map(f => cell(r, f.key)).join('') + '</tr>'; }).join('') + '</tbody></table>' + more(recs.length) : none;
   } else {
     const cols = [
       { key: '', label: '#', cls: 'rn' }, { key: 'date', label: 'Date', dir: 'desc' }, { key: 'supplier', label: 'Supplier' }, { key: 'invoice_no', label: 'Invoice' },
@@ -3576,9 +3600,9 @@ const tplHold = new Set();
 // how: 'manual' (the Save button) or 'auto'; returns null when there was nothing to save
 async function saveTemplateFor(doc, how) {
   const f = doc.result.fields, p0 = doc.pages[0];
-  const name = f.supplier ? String(f.supplier.value).trim() : '';
-  if (!name) return null;
   const abn = f.abn ? String(f.abn.value).replace(/\D/g, '') : '';
+  const name = preferredSupplierName(f.supplier ? f.supplier.value : '', abn);
+  if (!name || Engine.isCareOf(name)) return null;
   const old = S.templates.find(t => t.id === doc.tplId) || S.templates.find(t => (abn && t.abn === abn) || Engine.norm(t.name) === Engine.norm(name));
   const id = old ? old.id : 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const zones = doc.zones.map(z => Object.assign({ type: z.type, page: z.page, allPages: !!z.allPages, label: z.label || '', map: z.map || {}, rect: normRect(z.rect, doc.pages[z.page]) }, Engine.zoneSpec(doc.pages[z.page], z)));
