@@ -264,8 +264,6 @@ table.suplist { width: 100%; border-collapse: collapse; font: 400 12.5px/1.3 var
   .suplist td:nth-child(4)::before { content: "Owing "; color: var(--muted); font: 600 11px var(--font-display); letter-spacing: .06em; text-transform: uppercase; }
 }
 @media (pointer: coarse) {
-  .libsheet td:has(.suplink) { height: auto; }
-  .libsheet .suplink { min-height: 32px; display: inline-flex; align-items: center; }
   .sup .supbtn, .tpl .t .tplname { min-height: 36px; display: inline-flex; align-items: center; }
 }
 
@@ -286,13 +284,13 @@ table.libsheet { border-collapse: separate; border-spacing: 0; width: max-conten
   border-right: 1px solid var(--line); border-bottom: 1px solid var(--ink); box-shadow: 0 1px 0 var(--ink); }
 .libsheet th.num { text-align: right; }
 .libsheet th.on { color: var(--ink); background: var(--info-bg); }
-.libsheet th button { display: inline-flex; align-items: center; gap: 4px; width: 100%; border: 0; background: none; padding: 6px 8px; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; cursor: pointer; white-space: nowrap; }
+.libsheet th button { display: inline-flex; align-items: center; gap: 4px; width: 100%; border: 0; background: none; padding: 3px 6px; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; cursor: pointer; white-space: nowrap; }
 .libsheet th.num button { justify-content: flex-end; }
 .libsheet th button:hover { color: var(--ink); background: var(--surface); }
 .libsheet .so { font-size: 10px; color: var(--accent); opacity: .35; }
 .libsheet th.on .so { opacity: 1; }
 .libsheet th button:hover .so { opacity: .7; }
-.libsheet td { padding: 3px 8px; height: 24px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
+.libsheet td { padding: 1px 6px; height: 28px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
 .libsheet td.num, .libsheet th.num { text-align: right; }
 .libsheet td.clip { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .libsheet tr[data-item], .libsheet tr[data-inv] { cursor: pointer; }
@@ -313,7 +311,9 @@ table.libsheet { border-collapse: separate; border-spacing: 0; width: max-conten
 .sheet-hist { padding: 8px 10px 10px 36px; display: flex; flex-direction: column; gap: 8px; }
 .libsheet.nested { min-width: 0; width: max-content; }
 .libsheet.nested th { position: static; z-index: auto; box-shadow: none; border-bottom: 1px solid var(--line); }
-.libsheet.nested th, .libsheet.nested td { padding: 4px 10px; }
+.libsheet.nested th, .libsheet.nested td { padding: 2px 8px; height: 28px; }
+.libsheet .suplink, .libsheet th button, .libsheet .sheet-exp, .libsheet .iconbtn, .libsheet button.link { min-height: 0; height: auto; }
+.libsheet .iconbtn { width: 28px; height: 28px; }
 .sheet-more { position: sticky; bottom: 0; background: var(--surface); padding: 6px 8px; border-top: 1px solid var(--line); }
 .delta { font: 500 11.5px var(--font-data); border-radius: 999px; padding: 1px 6px; margin-left: 6px; }
 .delta.up { background: var(--warn-bg); color: var(--warn); } .delta.down { background: var(--good-bg); color: var(--good); }
@@ -446,7 +446,7 @@ a.contact:hover { background: var(--wash); text-decoration: underline; text-unde
   .mnav { display: flex; position: fixed; z-index: 28; left: 0; right: 0; bottom: 0; gap: 1px; background: var(--surface); border-top: 1px solid var(--line); padding: 2px 2px calc(2px + env(safe-area-inset-bottom)); padding-left: calc(2px + env(safe-area-inset-left)); padding-right: calc(2px + env(safe-area-inset-right)); }
   .mnav button { flex: 1; min-width: 0; min-height: 40px; border: 0; border-radius: 8px; background: none; color: var(--muted); padding: 2px 1px; font: 600 11px/1.1 var(--font-display); letter-spacing: .02em; text-transform: uppercase; }
   .mnav button[aria-current="page"] { background: var(--accent); color: var(--accent-ink); }
-  .btn, .iconbtn, .tool, .tabs [role="tab"], .seg button, .contact, .sup .supbtn, .libsheet .suplink, .tpl .t .tplname, button.link, .sheet-exp, .suplist .link, .libsheet th button { min-height: 40px; }
+  .btn, .iconbtn, .tool, .tabs [role="tab"], .seg button, .contact, .sup .supbtn, .tpl .t .tplname, button.link, .suplist .link { min-height: 40px; }
   .iconbtn { width: 40px; height: 40px; }
   .tool { height: 40px; min-width: 40px; }
   .btn.small { height: auto; min-height: 40px; padding: 4px 8px; font-size: 12px; }
@@ -3433,10 +3433,9 @@ function libDeltaHtml(it) {
   const prev = fmtPrice(it.prevPrice) + (it.prevUom ? ' ' + it.prevUom : '');
   return '<span class="delta ' + (it.delta > 0 ? 'up' : 'down') + '" title="Against the invoice before, ' + esc(prev) + '">' + (it.delta > 0 ? '↑ ' : '↓ ') + Math.abs(it.delta * 100).toFixed(1) + '%</span>';
 }
-function libItemRows(it, n, nCols) {
+function libItemRows(it, nCols) {
   const open = S.lib.open === it.key, d = libDeltaHtml(it), uom = it.mixed ? 'mixed' : (it.uom || '');
-  let h = '<tr class="' + (open ? 'open' : '') + '" data-item="' + esc(it.key) + '">' +
-    '<td class="rn"><button type="button" class="sheet-exp" data-item="' + esc(it.key) + '" aria-expanded="' + open + '" title="' + (open ? 'Hide price history' : 'Show price history') + '">' + (open ? '▾ ' : '▸ ') + n + '</button></td>' +
+  let h = '<tr class="' + (open ? 'open' : '') + '" data-item="' + esc(it.key) + '" title="' + (open ? 'Hide price history' : 'Show price history') + '">' +
     '<td>' + (it.item_no ? '<span class="code">' + esc(it.item_no) + '</span>' : '') + '</td>' +
     '<td class="clip" title="' + esc(it.description || '') + '">' + esc(it.description || 'No description') + '</td>' +
     '<td class="clip" title="' + esc(preferredSupplierName(it.supplier, itemSupId(it)) || '') + '">' + supNameBtn(preferredSupplierName(it.supplier, itemSupId(it)), itemSupId(it), 'suplink') + '</td>' +
@@ -3452,10 +3451,9 @@ function libItemRows(it, n, nCols) {
     '</tbody></table><div class="under"><span>' + it.lines + ' record' + pl(it.lines) + ', ' + money(it.spend) + ' in total</span>' + (Cloud.limited() ? '' : '<button class="link" type="button" data-hide="' + esc(it.key) + '">Hide this item from the library</button>') + '</div></div></td></tr>';
   return h;
 }
-function libInvRows(i, n, nCols) {
+function libInvRows(i, nCols) {
   const open = S.lib.open === i.key, ignored = (Lib.store.ignored || {});
-  let h = '<tr class="' + (open ? 'open' : '') + '" data-inv="' + esc(i.key) + '">' +
-    '<td class="rn"><button type="button" class="sheet-exp" data-inv="' + esc(i.key) + '" aria-expanded="' + open + '" title="' + (open ? 'Hide purchased items' : 'Show purchased items') + '">' + (open ? '▾ ' : '▸ ') + n + '</button></td>' +
+  let h = '<tr class="' + (open ? 'open' : '') + '" data-inv="' + esc(i.key) + '" title="' + (open ? 'Hide purchased items' : 'Show purchased items') + '">' +
     '<td>' + esc(niceDate(i.date || String(i.added).slice(0, 10))) + '</td>' +
     '<td class="clip" title="' + esc(preferredSupplierName(i.supplier, i.abn) || '') + '">' + supNameBtn(preferredSupplierName(i.supplier, i.abn), supplierIdFn()(i.supplier, i.abn), 'suplink') + '</td><td>' + esc(i.invoice_no || '') + '</td>' +
     '<td class="num">' + i.lines.length + '</td><td class="num">' + (i.total != null ? money(i.total) : '') + '</td><td>' + (i.src === 'gemini' ? 'Gemini' : i.src === 'claude' ? 'Claude' : 'Text') + '</td>' +
@@ -3493,31 +3491,31 @@ function renderLibrary() {
     h = '<p class="empty"><b>The library is empty.</b> Every invoice you open is saved here line by line, in this browser.' + (doc && doc.sample && !doc.lib ? ' <button class="link" type="button" data-act="lib-add">Save the sample invoice</button> to see how it looks.' : '') + '</p>';
   } else if (L.view === 'items') {
     const cols = [
-      { key: '', label: '#', cls: 'rn' }, { key: 'item_no', label: 'Code' }, { key: 'description', label: 'Description' }, { key: 'supplier', label: 'Supplier' },
+      { key: 'item_no', label: 'Code' }, { key: 'description', label: 'Description' }, { key: 'supplier', label: 'Supplier' },
       { key: 'qty', label: 'Qty', cls: 'num', dir: 'desc' }, { key: 'uom', label: 'UOM' }, { key: 'lastPrice', label: 'Last price', cls: 'num', dir: 'desc' },
       { key: 'lastDate', label: 'Last date', dir: 'desc' }, { key: 'delta', label: 'Change', cls: 'num', dir: 'desc' }, { key: 'nInv', label: 'Invoices', cls: 'num', dir: 'desc' },
       { key: 'spend', label: 'Spend', cls: 'num', dir: 'desc' }
     ];
     const items = a.items.filter(it => has(it.item_no + ' ' + it.description + ' ' + it.supplier + ' ' + (it.uom || '')));
     libOrder(items, 'items');
-    h = items.length ? '<table class="libsheet">' + libHead(cols, 'items') + '<tbody>' + items.slice(0, L.limit).map((it, i) => libItemRows(it, i + 1, cols.length)).join('') + '</tbody></table>' + more(items.length) : none;
+    h = items.length ? '<table class="libsheet">' + libHead(cols, 'items') + '<tbody>' + items.slice(0, L.limit).map(it => libItemRows(it, cols.length)).join('') + '</tbody></table>' + more(items.length) : none;
   } else if (L.view === 'records') {
     const F = Engine.FIELDS, num = k => Engine.FIELD_BY_KEY[k].numeric;
-    const cols = [{ key: '', label: '#', cls: 'rn' }, { key: 'date', label: 'Date', dir: 'desc' }, { key: 'supplier', label: 'Supplier' }, { key: 'invoice_no', label: 'Invoice' }]
+    const cols = [{ key: 'date', label: 'Date', dir: 'desc' }, { key: 'supplier', label: 'Supplier' }, { key: 'invoice_no', label: 'Invoice' }]
       .concat(F.map(f => ({ key: f.key, label: f.label, cls: f.numeric ? 'num' : '', dir: f.numeric ? 'desc' : 'asc' })));
     const recs = a.records.filter(r => has((r.item_no || '') + ' ' + (r.description || '') + ' ' + r.supplier + ' ' + r.invoice_no));
     libOrder(recs, 'records');
     const cell = (r, k) => { const v = r[k]; const inner = k === 'unit_price' ? priceHtml(v, r.uom) : esc(v == null ? '' : k === 'quantity' || k === 'weight' ? fmtQty(v) : num(k) && typeof v === 'number' ? v.toFixed(2) : v); return '<td class="' + (num(k) ? 'num' : k === 'description' ? 'clip' : '') + '"' + (k === 'description' && v ? ' title="' + esc(v) + '"' : '') + '>' + inner + '</td>'; };
     const idOf = supplierIdFn(), invBy = Lib.store.invoices || {};
-    h = recs.length ? '<table class="libsheet">' + libHead(cols, 'records') + '<tbody>' + recs.slice(0, L.limit).map((r, i) => { const sid = idOf(r.supplier, (invBy[r.inv] || {}).abn), who = preferredSupplierName(r.supplier, (invBy[r.inv] || {}).abn); return '<tr><td class="rn">' + (i + 1) + '</td><td>' + esc(niceDate(r.date)) + '</td><td class="clip" title="' + esc(who || '') + '">' + supNameBtn(who, sid, 'suplink') + '</td><td>' + esc(r.invoice_no) + '</td>' + F.map(f => cell(r, f.key)).join('') + '</tr>'; }).join('') + '</tbody></table>' + more(recs.length) : none;
+    h = recs.length ? '<table class="libsheet">' + libHead(cols, 'records') + '<tbody>' + recs.slice(0, L.limit).map(r => { const sid = idOf(r.supplier, (invBy[r.inv] || {}).abn), who = preferredSupplierName(r.supplier, (invBy[r.inv] || {}).abn); return '<tr><td>' + esc(niceDate(r.date)) + '</td><td class="clip" title="' + esc(who || '') + '">' + supNameBtn(who, sid, 'suplink') + '</td><td>' + esc(r.invoice_no) + '</td>' + F.map(f => cell(r, f.key)).join('') + '</tr>'; }).join('') + '</tbody></table>' + more(recs.length) : none;
   } else {
     const cols = [
-      { key: '', label: '#', cls: 'rn' }, { key: 'date', label: 'Date', dir: 'desc' }, { key: 'supplier', label: 'Supplier' }, { key: 'invoice_no', label: 'Invoice' },
+      { key: 'date', label: 'Date', dir: 'desc' }, { key: 'supplier', label: 'Supplier' }, { key: 'invoice_no', label: 'Invoice' },
       { key: 'nLines', label: 'Lines', cls: 'num', dir: 'desc' }, { key: 'total', label: 'Total', cls: 'num', dir: 'desc' }, { key: 'src', label: 'Read by' }, { key: 'phone', label: 'Phone' }, { key: 'email', label: 'Email' }, { key: 'file', label: 'File' }, { key: '', label: '', cls: 'act' }
     ];
     const invs = a.invoices.filter(i => has(i.supplier + ' ' + i.invoice_no + ' ' + i.file + ' ' + (i.phone || '') + ' ' + (i.email || '')));
     libOrder(invs, 'invoices');
-    h = invs.length ? '<table class="libsheet">' + libHead(cols, 'invoices') + '<tbody>' + invs.slice(0, L.limit).map((i, n) => libInvRows(i, n + 1, cols.length)).join('') + '</tbody></table>' + more(invs.length) : none;
+    h = invs.length ? '<table class="libsheet">' + libHead(cols, 'invoices') + '<tbody>' + invs.slice(0, L.limit).map(i => libInvRows(i, cols.length)).join('') + '</tbody></table>' + more(invs.length) : none;
   }
   const box = $('#lib-body'), keep = (renderLibrary._v === L.view && renderLibrary._q === L.q) ? { x: box.scrollLeft, y: box.scrollTop } : { x: 0, y: 0 };
   box.innerHTML = h; box.scrollLeft = keep.x; box.scrollTop = keep.y; renderLibrary._v = L.view; renderLibrary._q = L.q;
