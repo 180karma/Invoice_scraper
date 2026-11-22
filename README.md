@@ -8,13 +8,10 @@ Drop in supplier invoices (PDF or image) to extract line items, header fields, a
 
 ## Shared kitchen library
 
-The page connects with the project's anon key, then asks for a **username and password**. There is no email sign-in. The admin username is Admin.
+The page opens straight into the app. There is no sign-in screen. The library is kept in this browser.
 
 - Run `supabase-schema.sql` once in the Supabase SQL editor (safe to re-run). Run it again if an admin delete of a logo is refused: the file ends with the `admin delete supplier logos` policy.
-- Signed-in people see the same library and can add invoices. The admin can also change and delete records, and add or remove usernames under Settings → Staff.
-- Settings → Admin deletes one kind of data at a time (one invoice and its lines, all invoices, line items, one supplier and its invoices, lines, layout and logo, all suppliers, contacts, price history, one or all layouts, one or all logos, or everything). The confirm step names what will be removed. A delete is written here and in Supabase, and the next sync does not bring it back.
-- Optional `ADMIN_EMAILS` (comma-separated sign-in emails) is read like the Supabase URL: repository variable on Pages, or `.env` locally, then `node scripts/make-config.mjs`. The Admin username’s sign-in email is `admin@users.invoice.local`. If the variable is empty, every staff account with the admin role can delete. The address is not written into the page by hand.
-- If the admin username is gone, the sign-in page can email a magic link. The link returns to `https://180karma.github.io/Invoice_scraper/`. Supabase Site URL must be that address, and Redirect URLs must include `https://180karma.github.io/Invoice_scraper/**`, or the email opens localhost. A refused sign-in keeps the Supabase sentence after “Supabase said:”. Run the `claim_kitchen_admin` block at the end of `supabase-schema.sql` again if a username-only admin row is still blocking a real inbox. Settings → Staff will not remove the last sign-in, and Delete everything does not remove staff.
+- Deleting stored data stays off the screen until an admin unlocks it for this visit. A refresh locks it again. Settings → Admin then deletes one kind of data at a time (one invoice and its lines, all invoices, line items, one supplier and its invoices, lines, layout and logo, all suppliers, contacts, price history, one or all layouts, one or all logos, or everything). The confirm step names what will be removed. The delete is kept in this browser. Supabase still only accepts a delete from a signed-in admin session, and this page does not start one, so the server copy is not changed.
 
 ## Keys
 

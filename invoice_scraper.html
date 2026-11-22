@@ -537,6 +537,14 @@ a.contact:hover { background: var(--wash); text-decoration: underline; text-unde
 </div>
 <div class="toast" id="toast" role="status" hidden></div>
 <div class="modal" id="settings" hidden role="dialog" aria-modal="true" aria-labelledby="setTitle"></div>
+<div class="modal" id="adminGate" hidden role="dialog" aria-modal="true" aria-labelledby="adminGateTitle">
+  <div class="card">
+    <h2 id="adminGateTitle">Admin<button type="button" class="iconbtn" id="adminGateClose" aria-label="Close">&times;</button></h2>
+    <div class="field"><label for="adminGatePass">Password</label><input id="adminGatePass" type="password" autocomplete="off"></div>
+    <div class="row"><button class="btn primary" type="button" id="adminGateGo">Continue</button></div>
+    <p class="note" id="adminGateMsg" hidden></p>
+  </div>
+</div>
 <div class="modal gate" id="gate" hidden role="dialog" aria-modal="true" aria-labelledby="gateTitle"></div>
 <div class="modal supmodal" id="supModal" hidden role="dialog" aria-modal="true" aria-labelledby="supTitle"></div>
 <nav class="mnav" id="mnav" aria-label="Sections">
@@ -2810,7 +2818,7 @@ function layoutActs(doc, tpls) {
     const on = doc && doc.tplId === t.id;
     const meta = t.zones.length + ' box' + (t.zones.length === 1 ? '' : 'es') + (t.auto ? ' · saved automatically' : '') + (on ? ' · in use' : '');
     const apply = doc && !on && sameLayoutSupplier(doc, t) ? '<button class="btn small" type="button" data-apply="' + esc(t.id) + '">Apply</button>' : '';
-    const del = Cloud.limited() ? '' : '<button class="btn small danger" type="button" data-del="' + esc(t.id) + '">Delete</button>';
+    const del = adminUnlocked() ? '<button class="btn small danger" type="button" data-del="' + esc(t.id) + '">Delete</button>' : '';
     return '<div class="row"><span class="note">' + meta + '</span>' + apply + del + '</div>';
   }).join('');
 }
@@ -3439,7 +3447,7 @@ function libItemRows(it, nCols) {
     '<td class="num">' + money(it.spend) + '</td></tr>';
   if (open) h += '<tr class="hist"><td colspan="' + nCols + '"><div class="sheet-hist"><table class="libsheet nested"><thead><tr><th>Date</th><th>Invoice</th><th class="num">Qty</th><th>UOM</th><th class="num">Unit price</th><th class="num">Amount</th></tr></thead><tbody>' +
     it.history.map(r => '<tr><td>' + esc(niceDate(r.date)) + '</td><td>' + esc(r.invoice_no || '') + '</td><td class="num">' + esc(fmtQty(r.quantity)) + '</td><td>' + esc(r.uom || '') + '</td><td class="num">' + priceHtml(r.unit_price, r.uom) + '</td><td class="num">' + esc(typeof r.amount === 'number' ? money(r.amount) : (r.amount || '')) + '</td></tr>').join('') +
-    '</tbody></table><div class="under"><span>' + it.lines + ' record' + pl(it.lines) + ', ' + money(it.spend) + ' in total</span>' + (Cloud.limited() ? '' : '<button class="link" type="button" data-hide="' + esc(it.key) + '">Hide this item from the library</button>') + '</div></div></td></tr>';
+    '</tbody></table><div class="under"><span>' + it.lines + ' record' + pl(it.lines) + ', ' + money(it.spend) + ' in total</span>' + (adminUnlocked() ? '<button class="link" type="button" data-hide="' + esc(it.key) + '">Hide this item from the library</button>' : '') + '</div></div></td></tr>';
   return h;
 }
 function libInvRows(i, nCols) {
@@ -3450,7 +3458,7 @@ function libInvRows(i, nCols) {
     '<td class="num">' + i.lines.length + '</td><td class="num">' + (i.total != null ? money(i.total) : '') + '</td><td>' + (i.src === 'gemini' ? 'Gemini' : i.src === 'claude' ? 'Claude' : 'Text') + '</td>' +
     '<td class="clip">' + Engine.splitList(i.phone).map(telLink).join(' ') + '</td><td class="clip">' + Engine.splitList(i.email).map(mailLink).join(' ') + '</td>' +
     '<td class="clip" title="' + esc(i.file || '') + '">' + esc(i.file || '') + '</td>' +
-    '<td class="act">' + (Cloud.limited() ? '' : '<button class="iconbtn" type="button" data-rm-inv="' + esc(i.key) + '" aria-label="Remove ' + esc(i.invoice_no || i.file) + ' from the library" title="Remove from the library">' + IC.bin.replace('<svg', '<svg width="18" height="18"') + '</button>') + '</td></tr>';
+    '<td class="act">' + (adminUnlocked() ? '<button class="iconbtn" type="button" data-rm-inv="' + esc(i.key) + '" aria-label="Remove ' + esc(i.invoice_no || i.file) + ' from the library" title="Remove from the library">' + IC.bin.replace('<svg', '<svg width="18" height="18"') + '</button>' : '') + '</td></tr>';
   if (open) h += '<tr class="hist"><td colspan="' + nCols + '"><div class="sheet-hist"><p class="note">Items purchased on this invoice. Ignore one to leave it out when new invoices are scanned.</p><table class="libsheet nested"><thead><tr><th class="act"></th><th>Code</th><th>Description</th><th class="num">Qty</th><th>UOM</th><th class="num">Unit price</th><th class="num">Amount</th></tr></thead><tbody>' +
     i.lines.map(L => {
       const id = Library.lineId(i, L), off = Library.keyIsIgnored(ignored, id);
@@ -3514,9 +3522,9 @@ function renderLibrary() {
   $('#lib-foot').innerHTML = '<div class="row">' +
     '<button class="btn small" type="button" data-act="lib-backup"' + off + ' title="Downloads the library file, plus the items CSV and the records CSV">Download data</button>' +
     '<button class="btn small" type="button" data-act="lib-restore">Restore</button>' +
-    (Cloud.isAdmin() ? '<button class="btn small danger" type="button" data-act="lib-clear"' + off + '>' + (L.armed ? 'Tap again to delete everything' : 'Clear library') + '</button>' : '') +
+    (adminUnlocked() ? '<button class="btn small danger" type="button" data-act="lib-clear"' + off + '>' + (L.armed ? 'Tap again to delete everything' : 'Clear library') + '</button>' : '') +
     '</div>' +
-    (a.hidden ? '<p class="note">' + a.hidden + ' item' + pl(a.hidden) + ' hidden.' + (Cloud.limited() ? '' : ' <button class="link" type="button" data-act="lib-unhide">Show ' + (a.hidden === 1 ? 'it' : 'them') + ' again</button>') + '</p>' : '') +
+    (a.hidden ? '<p class="note">' + a.hidden + ' item' + pl(a.hidden) + ' hidden.' + (adminUnlocked() ? ' <button class="link" type="button" data-act="lib-unhide">Show ' + (a.hidden === 1 ? 'it' : 'them') + ' again</button>' : '') + '</p>' : '') +
     (a.ignored ? '<p class="note">' + a.ignored + ' item' + pl(a.ignored) + ' ignored on new invoices. <button class="link" type="button" data-act="lib-unignore">Scan ' + (a.ignored === 1 ? 'it' : 'them') + ' again</button></p>' : '') +
     (Cloud.ready() ? '<p class="note">The library lives in this browser and is copied to Supabase (signed in as ' + esc((Cloud.user && Cloud.user.name) || 'this account') + '). Everyone signed in sees the same invoices and items.</p>'
       : '<p class="note">The library lives in this browser’s local storage on this device. Another browser or device starts empty, and clearing site data erases it, so take a backup now and then, or turn on the Supabase copy in Settings.</p>');
@@ -3525,7 +3533,7 @@ function renderLibrary() {
 // sends everything in this browser's local storage up, then loads the merged copy back
 async function libUpload() {
   if (S.lib.uploading) return;
-  if (!Cloud.ready()) { toast('Sign in first.', 'bad'); return; }
+  if (!Cloud.ready()) { toast('This stays on this device. Supabase has no signed-in session to take the upload.', 'bad'); return; }
   flushSync();
   const n = Object.keys(Lib.store.invoices).length, t = S.templates.length;
   S.lib.uploading = true; renderLibrary();
@@ -3554,7 +3562,39 @@ async function giveFile(name, text, what) {
   try { await navigator.clipboard.writeText((text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text)); toast(what + ' copied. Saving files is not available in this view.'); }
   catch (e) { toast('Saving files is not available in this view.', 'bad'); }
 }
-function adminOnly() { if (!Cloud.limited()) return false; toast('Only an admin can change or delete what is already in the library.'); return true; }
+const AdminGate = { on: false };
+function adminUnlocked() { return AdminGate.on; }
+function adminPasswordMatches(v) { return String(v || '') === 'awd1234'; }
+function closeAdminGate() {
+  const g = $('#adminGate'); if (!g) return;
+  g.hidden = true;
+  const p = $('#adminGatePass'); if (p) p.value = '';
+  const m = $('#adminGateMsg'); if (m) { m.hidden = true; m.textContent = ''; }
+}
+function openAdminGate() {
+  if (AdminGate.on) return;
+  const g = $('#adminGate'); if (!g) return;
+  const m = $('#adminGateMsg'); if (m) { m.hidden = true; m.textContent = ''; }
+  g.hidden = false;
+  const p = $('#adminGatePass'); if (p) { p.value = ''; setTimeout(() => p.focus(), 30); }
+}
+function refreshAdminUi() {
+  renderAll(); renderLibrary();
+  if (!$('#settings').hidden) renderSettings('');
+  const sm = $('#supModal'); if (sm && !sm.hidden) renderSupplier();
+}
+function tryAdminGate() {
+  const p = $('#adminGatePass'), v = p ? p.value : '';
+  if (!adminPasswordMatches(v)) {
+    if (p) p.value = '';
+    const m = $('#adminGateMsg'); if (m) { m.hidden = false; m.textContent = 'That password is wrong.'; }
+    if (p) p.focus();
+    return;
+  }
+  AdminGate.on = true; closeAdminGate(); refreshAdminUi();
+}
+function lockAdmin() { AdminGate.on = false; closeAdminGate(); refreshAdminUi(); }
+function adminOnly() { if (adminUnlocked()) return false; toast('Only an admin can change or delete what is already in the library.'); return true; }
 // library buttons work with or without an invoice open; returns true when it handled the click
 function libAct(act) {
   const BOM = String.fromCharCode(0xFEFF), day = new Date().toISOString().slice(0, 10), d = cur();
@@ -3588,7 +3628,7 @@ function libAct(act) {
     }
     case 'lib-restore': { const f = $('#libFile'); if (f) f.click(); return true; }
     case 'lib-clear':
-      if (!Cloud.isAdmin()) { toast('Only an admin can clear the library.', 'bad'); return true; }
+      if (!adminUnlocked()) { toast('Only an admin can clear the library.', 'bad'); return true; }
       if (!S.lib.armed) { S.lib.armed = true; renderLibrary(); clearTimeout(libAct.t); libAct.t = setTimeout(() => { S.lib.armed = false; if (S.tab === 'library') renderLibrary(); }, 4000); return true; }
       clearTimeout(libAct.t); S.lib.armed = false; S.lib.open = null;
       Lib.mutate(st => { st.invoices = {}; st.hidden = {}; st.ignored = {}; });
@@ -3841,7 +3881,7 @@ async function gemCall(body, signal) {
   catch (e) { if (e && e.code === 'server_off') Gem.serverWhy = e.why || ''; throw e; }
 }
 function gemNeed() {
-  if (!Cloud.user || !Cloud.role) return 'Sign in to scan with the Gemini key kept in Supabase.';
+  if (!Cloud.user || !Cloud.role) return 'A Gemini scan needs a Supabase session. This page keeps the invoice on this device.';
   return gemErr({ code: 'server_off', via: 'server', why: Gem.serverWhy });
 }
 function looseJson(t) {
@@ -3864,12 +3904,12 @@ function gemErr(e) {
   if (!e) return 'Gemini could not scan this page.';
   switch (e.code) {
     case 'cancelled': return '';
-    case 'no_key': return 'Sign in to scan with Gemini.';
+    case 'no_key': return 'A Gemini scan needs a Supabase session. This page keeps the invoice on this device.';
     case 'server_off':
       if (e.why === 'not_configured') return 'Scanning through Supabase needs the GEMINI_API_KEY secret. Add it to the GitHub repository secrets and run the Gemini function workflow.';
       if (e.why === 'network') return 'The Gemini scan function in Supabase could not be reached. It may not be deployed yet.';
       return 'The Gemini scan function (gemini-extract) is not ' + (e.why === 'missing' ? 'deployed to Supabase yet.' : 'working in Supabase right now.');
-    case 'server_auth': return 'Sign in again to scan with Gemini.';
+    case 'server_auth': return 'Supabase refused the Gemini scan because there is no signed-in session.';
     case 'not_allowed': return 'This account is not on the kitchen staff list, so it can’t scan with Gemini.';
     case 'blocked': return 'Gemini can’t be reached from inside Claude. Open your own copy of this page to use it.';
     case 'network': return 'Supabase could not reach Gemini. Try again in a minute.';
@@ -4721,7 +4761,7 @@ const Cloud = {
 function renderSyncPill() {
   const b = $('#syncPill'); if (!b) return;
   const C = Cloud;
-  if (!C.key || (!C.user && C.state !== 'error' && C.state !== 'offline')) { b.hidden = !C.key || !C.loaded; b.className = 'pill syncpill'; b.textContent = 'Sign in'; b.title = 'Sign in to copy data to Supabase'; }
+  if (!C.user) { b.hidden = false; b.className = 'pill syncpill' + (C.state === 'error' ? ' bad' : C.state === 'offline' ? ' warn' : ''); b.textContent = 'On this device'; b.title = C.state === 'error' && C.err ? hideKey(C.err) : 'The library is saved in this browser'; }
   else {
     const map = { synced: ['good', 'Synced'], syncing: ['', 'Syncing'], offline: ['warn', 'Offline'], error: ['bad', 'Sync error'], off: ['', 'Syncing'] }, v = map[C.state] || map.off;
     b.hidden = false; b.className = 'pill syncpill' + (v[0] ? ' ' + v[0] : ''); b.textContent = v[1];
@@ -4753,7 +4793,7 @@ function sbBoxHtml() {
       '<div class="row"><button class="btn small' + (C.meta.uploadedAt ? '' : ' primary') + '" type="button" data-set="sb-upload">' + (C.meta.uploadedAt ? 'Upload everything again' : 'Upload existing data') + '</button><button class="btn small" type="button" data-set="sb-pull">Load from Supabase</button></div>' +
       '<p class="note">Every change is saved to Supabase while you are signed in.' + (C.meta.uploadedAt ? ' Everything in this browser was uploaded on ' + esc(niceDate(C.meta.uploadedAt.slice(0, 10))) + '.' : '') + '</p>';
   } else if (C.key) {
-    acct = '<p class="note">Sign in with the username and password an admin gave you.</p>';
+    acct = '<p class="note">The library is saved in this browser. A delete stays on this device. Supabase only accepts a delete from a signed-in admin session, and this page does not ask for one.</p>';
   }
   const where = !S.standalone ? '<p class="pill warn">Inside Claude this page can’t reach Supabase. Sync works in your own copy of the page: the invoice_scraper.html file on your own site, or opened in Chrome, Edge or Safari.</p>' : '';
   if (C.keyFrom === 'env') return where + acct + msg;
@@ -4823,7 +4863,7 @@ const CLAIM_SQL = [
   'revoke all on function public.claim_kitchen_admin() from public, anon;',
   'grant execute on function public.claim_kitchen_admin() to authenticated;'
 ].join('\n');
-function gateShown() { return S.standalone && !!Cloud.key && !(Cloud.user && Cloud.role) && !Cloud.offlinePass(); }
+function gateShown() { return false; }
 function gateHtml() {
   const C = Cloud, msg = C.gateMsg ? '<p class="note" aria-live="polite">' + esc(hideKey(C.gateMsg)) + '</p>' : '';
   const down = C.state === 'error' || C.state === 'offline';
@@ -5121,7 +5161,7 @@ function adminPlan(kind, which) {
   return fail('Choose what to delete.');
 }
 function adminDelHtml() {
-  if (!Cloud.isAdmin()) return '';
+  if (!adminUnlocked()) return '';
   const kinds = [
     ['invoice', 'One invoice'], ['invoices', 'All invoices'], ['lines', 'Line items and records'],
     ['supplier', 'One supplier'], ['suppliers', 'All suppliers'], ['contacts', 'Contacts'],
@@ -5138,7 +5178,8 @@ function adminDelHtml() {
     ? '<div class="confirm" role="alert"><p>' + esc(plan.detail) + '</p><div class="row"><button class="btn small danger" type="button" data-set="admin-go"' + dis + '>Delete this</button><button class="btn small" type="button" data-set="admin-back"' + dis + '>Back</button></div></div>'
     : '<div class="row"><button class="btn small danger" type="button" data-set="admin-review"' + (dis || !plan.ok ? ' disabled' : '') + '>Review delete</button></div>' + (!plan.ok ? '<p class="note">' + esc(plan.reason) + '</p>' : '');
   return '<div class="admindel">' + kindSel + whichSel + confirm +
-    '<p class="note">Only the signed-in admin can delete. Each delete is saved in this browser and in Supabase, including logo files, and a later sync will not bring it back.</p>' +
+    '<p class="note">A delete is saved in this browser. Supabase receives it only when a signed-in admin session is already open. A later sync will not bring back a delete that reached Supabase.</p>' +
+    '<div class="row"><button class="btn small" type="button" data-set="admin-lock">Lock</button></div>' +
     (AdminDel.msg ? '<p class="note" aria-live="polite">' + esc(hideKey(AdminDel.msg)) + '</p>' : '') + '</div>';
 }
 function renderAdminDel() { const b = $('#admin-del'); if (b) b.innerHTML = adminDelHtml(); }
@@ -5201,8 +5242,9 @@ async function adminRun(plan) {
   if (Cloud.ready()) await Cloud.syncNow();
 }
 async function adminAct(act) {
+  if (act === 'admin-lock') { lockAdmin(); return; }
   if (act === 'admin-back') { AdminDel.step = ''; AdminDel.msg = ''; renderAdminDel(); return; }
-  if (!Cloud.isAdmin()) { AdminDel.msg = 'Only an admin can delete.'; renderAdminDel(); return; }
+  if (!adminUnlocked()) { AdminDel.msg = 'Only an admin can delete.'; renderAdminDel(); return; }
   const plan = adminPlan(AdminDel.kind, AdminDel.which);
   if (!plan.ok) { AdminDel.step = ''; AdminDel.msg = plan.reason; renderAdminDel(); return; }
   if (act === 'admin-review') { AdminDel.step = 'confirm'; AdminDel.msg = ''; renderAdminDel(); return; }
@@ -5211,7 +5253,8 @@ async function adminAct(act) {
   try {
     await adminRun(plan);
     AdminDel.step = '';
-    AdminDel.msg = Cloud.state === 'error' ? (Cloud.err || 'Supabase could not finish the delete.') : 'Deleted. It stays gone after the next sync.';
+    const sent = Cloud.ready() && Cloud.state !== 'error';
+    AdminDel.msg = Cloud.state === 'error' ? (Cloud.err || 'Supabase could not finish the delete.') : (sent ? 'Deleted. It stays gone after the next sync.' : 'Deleted on this device. Supabase has no signed-in session, so the server copy was not changed.');
     toast(AdminDel.msg, Cloud.state === 'error' ? 'bad' : '');
     renderAll();
   } catch (e) {
@@ -5248,10 +5291,10 @@ function renderSettings(msg) {
   $('#settings').innerHTML = '<div class="card"><h2 id="setTitle">Settings<button class="iconbtn" type="button" data-set="close" aria-label="Close settings">&times;</button></h2>' +
     (S.setNote ? '<p class="pill warn">' + esc(S.setNote) + '</p>' : '') +
     '<h3 class="sec">Supabase copy</h3>' +
-    '<p class="note">Every change is saved to Supabase while you are signed in. It also keeps working offline and catches up when the connection is back.</p>' +
+    '<p class="note">Changes stay in this browser. They are copied to Supabase only while a session is already signed in.</p>' +
     '<div id="sb-box">' + sbBoxHtml() + '</div>' +
     (Cloud.isAdmin() ? '<h3 class="sec">Staff</h3><div id="staff-box">' + staffBoxHtml() + '</div>' : '') +
-    (Cloud.isAdmin() ? '<h3 class="sec">Admin</h3><div id="admin-del">' + adminDelHtml() + '</div>' : '') +
+    (adminUnlocked() ? '<h3 class="sec">Admin</h3><div id="admin-del">' + adminDelHtml() + '</div>' : '') +
     '<h3 class="sec">Invoice folder</h3>' + folder +
     (msg ? '<p class="note" aria-live="polite">' + hideKey(msg) + '</p>' : '') +
     '<div class="row"><button class="btn" type="button" data-set="close">Done</button></div></div>';
@@ -5323,7 +5366,18 @@ $('#openBtn').addEventListener('click', async () => {
 });
 $('#setBtn').addEventListener('click', () => setMob('settings'));
 $('#syncPill').addEventListener('click', () => setMob('settings'));
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#settings').hidden) { e.stopImmediatePropagation(); closeSettings(); $('#setBtn').focus(); } }, true);
+document.addEventListener('keydown', e => {
+  if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === 'KeyT') { e.preventDefault(); openAdminGate(); return; }
+  const ag = $('#adminGate');
+  if (e.key === 'Escape' && ag && !ag.hidden) { e.preventDefault(); e.stopPropagation(); closeAdminGate(); return; }
+  if (e.key === 'Escape' && !$('#settings').hidden) { e.stopImmediatePropagation(); closeSettings(); $('#setBtn').focus(); }
+}, true);
+$('#adminGate').addEventListener('click', e => {
+  if (e.target.id === 'adminGate' || e.target.id === 'adminGateClose') { closeAdminGate(); return; }
+  if (e.target.id === 'adminGateGo') tryAdminGate();
+});
+$('#adminGate').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); tryAdminGate(); } });
+window.addEventListener('pageshow', e => { if (e.persisted && AdminGate.on) lockAdmin(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#supModal').hidden) { e.preventDefault(); e.stopImmediatePropagation(); closeSupplier(); } }, true);
 $('#supModal').addEventListener('click', async e => {
   if (e.target.closest('a[href]')) return;
